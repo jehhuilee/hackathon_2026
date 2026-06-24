@@ -14,6 +14,16 @@ def normalize_question_item(item: Dict[str, Any], index: int) -> Dict[str, Any]:
     }
 
 
+def normalize_followup_item(item: Dict[str, Any], index: int) -> Dict[str, Any]:
+    return {
+        "id": f"f{index + 1}",
+        "category": "꼬리 질문",
+        "keyword": item.get("keyword") or "",
+        "question": item.get("question") or "",
+        "intent": item.get("intent") or "",
+    }
+
+
 def normalize_evaluation_result(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "total_score": int(payload.get("total_score", 0)),

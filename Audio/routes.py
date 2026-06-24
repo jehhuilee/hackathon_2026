@@ -9,6 +9,8 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from Audio.config import (
     CHANNELS,
+    DEFAULT_PERSONA,
+    FEEDBACK_PROFILES,
     MAX_QUEUED_FRAMES,
     SAMPLE_RATE,
     SUPPORTED_DTYPES,
@@ -38,7 +40,7 @@ async def audio_websocket(websocket: WebSocket) -> None:
     await websocket.accept()
 
     active_dtype: AudioDType = "int16"
-    runtime_config: dict[str, Any] = {"vad_level": 2}
+    runtime_config: dict[str, Any] = {"vad_level": 2, "persona": DEFAULT_PERSONA}
     queue: asyncio.Queue[AudioFrame | None] = asyncio.Queue(maxsize=MAX_QUEUED_FRAMES)
     send_lock = asyncio.Lock()
     worker = asyncio.create_task(analysis_worker(queue, websocket, send_lock, runtime_config))
@@ -83,6 +85,10 @@ async def audio_websocket(websocket: WebSocket) -> None:
                     if isinstance(requested_vad_level, int) and 0 <= requested_vad_level <= 3:
                         runtime_config["vad_level"] = requested_vad_level
 
+                    requested_persona = config.get("persona", runtime_config["persona"])
+                    if requested_persona in FEEDBACK_PROFILES:
+                        runtime_config["persona"] = requested_persona
+
                     await send_json_safe(
                         websocket,
                         send_lock,
@@ -90,6 +96,7 @@ async def audio_websocket(websocket: WebSocket) -> None:
                             "event": "CONFIG_ACK",
                             "dtype": active_dtype,
                             "vad_level": runtime_config["vad_level"],
+                            "persona": runtime_config["persona"],
                             "sample_rate": SAMPLE_RATE,
                             "channels": CHANNELS,
                         },

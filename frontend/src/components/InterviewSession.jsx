@@ -9,6 +9,12 @@ const ALERT_LABELS = {
   LONG_SILENCE: "침묵이 길어지고 있어요",
 };
 
+const PERSONA_LABELS = {
+  A: "친근한 면접관 (널널한 기준)",
+  B: "표준 면접관 (보통 기준)",
+  C: "엄격한 면접관 (빡빡한 기준)",
+};
+
 // Drives the per-question interview: live video+audio coaching, record an
 // answer, upload it for transcription + evaluation, then advance.
 export default function InterviewSession({ session, onComplete }) {
@@ -19,6 +25,7 @@ export default function InterviewSession({ session, onComplete }) {
   const [submitting, setSubmitting] = useState(false);
   const [lastResult, setLastResult] = useState(null);
   const [audioAlert, setAudioAlert] = useState("");
+  const [voiceMetrics, setVoiceMetrics] = useState(null);
   const [error, setError] = useState("");
 
   const questions = session.questions;
@@ -33,11 +40,16 @@ export default function InterviewSession({ session, onComplete }) {
   const handleStart = () => {
     setLastResult(null);
     setAudioAlert("");
+    setVoiceMetrics(null);
+    setError("");
     recorder.startRecording();
     const stream = recorder.mediaStreamRef.current;
     if (stream) {
       audioStreamRef.current = new AudioFeedbackStream({
         onAlert: (msg) => setAudioAlert(ALERT_LABELS[msg.event] || msg.event),
+        onStatus: (status) => setVoiceMetrics(status),
+        onError: (err) => setError(err.message),
+        persona: session.persona,
       });
       audioStreamRef.current.start(stream);
     }
@@ -94,6 +106,9 @@ export default function InterviewSession({ session, onComplete }) {
 
         <div style={styles.feedbackPanel}>
           <h3>실시간 피드백</h3>
+          <p style={styles.personaTag}>
+            🎯 {PERSONA_LABELS[session.persona] || PERSONA_LABELS.B}
+          </p>
           <p style={styles.feedbackText}>{recorder.liveFeedback}</p>
           {audioAlert && <p style={styles.audioAlert}>🔊 {audioAlert}</p>}
           <div style={styles.metrics}>
@@ -101,6 +116,13 @@ export default function InterviewSession({ session, onComplete }) {
             <div>상체 움직임: {recorder.liveMetrics.postureMovement}</div>
             <div>손동작량: {recorder.liveMetrics.handMovement}</div>
             <div>어깨 기울기: {recorder.liveMetrics.shoulderTilt}</div>
+            {voiceMetrics && (
+              <>
+                <div>말 빠르기: {voiceMetrics.syllables_per_second?.toFixed(1)} 음절/초</div>
+                <div>평균 피치: {voiceMetrics.pitch_mean_hz?.toFixed(0)} Hz</div>
+                <div>최장 침묵: {voiceMetrics.longest_silence_seconds?.toFixed(1)} 초</div>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -192,6 +214,7 @@ const styles = {
     borderRadius: 12,
     padding: 16,
   },
+  personaTag: { fontSize: 13, fontWeight: 600, color: "#2563eb", margin: "0 0 8px" },
   feedbackText: { fontSize: 18, fontWeight: 700 },
   audioAlert: { color: "#d64545", fontWeight: 600 },
   metrics: { display: "grid", gap: 8, marginTop: 12, fontSize: 14 },

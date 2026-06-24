@@ -41,10 +41,13 @@ function floatToInt16(samples) {
 }
 
 export class AudioFeedbackStream {
-  // onAlert(event), onStatus(statusObj) are optional callbacks for live UI.
-  constructor({ onAlert, onStatus } = {}) {
+  // onAlert(event), onStatus(statusObj), onError(err) are optional callbacks for live UI.
+  // persona ("A" | "B" | "C") selects the interviewer strictness for alert thresholds.
+  constructor({ onAlert, onStatus, onError, persona } = {}) {
     this.onAlert = onAlert;
     this.onStatus = onStatus;
+    this.onError = onError;
+    this.persona = persona || "B";
     this.ws = null;
     this.audioContext = null;
     this.source = null;
@@ -61,7 +64,9 @@ export class AudioFeedbackStream {
     this.ws.binaryType = "arraybuffer";
 
     this.ws.onopen = () => {
-      this.ws.send(JSON.stringify({ event: "config", dtype: "int16", vad_level: 2 }));
+      this.ws.send(
+        JSON.stringify({ event: "config", dtype: "int16", vad_level: 2, persona: this.persona }),
+      );
 
       this.audioContext = new AudioContext();
       this.source = this.audioContext.createMediaStreamSource(stream);
@@ -96,6 +101,18 @@ export class AudioFeedbackStream {
         this.onStatus?.(message);
       } else if (ALERT_EVENTS.includes(message.event)) {
         this.onAlert?.(message);
+      }
+    };
+
+    // Surface connection failures instead of silently dropping real-time feedback.
+    this.ws.onerror = () => {
+      this.onError?.(new Error("실시간 음성 분석 서버에 연결하지 못했습니다."));
+    };
+
+    this.ws.onclose = (event) => {
+      // 1000 = normal close (our own stop()). Anything else is unexpected.
+      if (!event.wasClean && event.code !== 1000) {
+        this.onError?.(new Error("실시간 음성 분석 연결이 끊어졌습니다."));
       }
     };
   }

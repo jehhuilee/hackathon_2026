@@ -1,7 +1,19 @@
-# Gateway-specific deps. Install alongside Audio/requirements.txt.
+# Gateway-specific deps. This file is self-contained: installing it alone is
+# enough to run `uvicorn app.main:app` with real-time audio analysis enabled.
 fastapi==0.95.2
 uvicorn[standard]==0.22.0
 python-multipart>=0.0.6
 openai>=1.0.0
 # Local STT (only needed when STT_BACKEND=local):
 faster-whisper>=1.0.0
+# Real-time audio DSP track (Audio/ package). Without these, Audio.routes fails
+# to import and the /ws/audio WebSocket is silently not mounted.
+# setuptools provides pkg_resources, which webrtcvad imports at runtime
+# (not bundled with Python 3.12+ venvs). Capped <81 because setuptools 81+
+# removed pkg_resources.
+setuptools>=68,<81
+numpy>=1.24
+scipy>=1.11
+librosa>=0.10.0
+webrtcvad==2.0.10
+soundfile>=0.12.1

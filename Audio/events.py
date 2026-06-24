@@ -3,12 +3,7 @@
 import time
 from typing import Any
 
-from Audio.config import (
-    LONG_SILENCE_SECONDS,
-    PITCH_JITTER_UNSTABLE_HZ,
-    PITCH_STD_UNSTABLE_HZ,
-    SYLLABLES_PER_SECOND_TOO_FAST,
-)
+from Audio.config import FeedbackThresholds, get_thresholds
 from Audio.models import AnalysisResult
 
 
@@ -28,35 +23,48 @@ class AlertCooldown:
         return True
 
 
-def build_alerts(result: AnalysisResult) -> list[dict[str, Any]]:
-    """Convert metrics into client-facing alert event messages."""
+def build_alerts(
+    result: AnalysisResult,
+    thresholds: FeedbackThresholds | None = None,
+) -> list[dict[str, Any]]:
+    """Convert metrics into client-facing alert event messages.
+
+    ``thresholds`` selects the interviewer persona's strictness; when omitted the
+    standard (default) persona is used.
+    """
+    if thresholds is None:
+        thresholds = get_thresholds(None)
+
     alerts: list[dict[str, Any]] = []
 
-    if result.syllables_per_second > SYLLABLES_PER_SECOND_TOO_FAST:
+    if result.syllables_per_second > thresholds.syllables_per_second_too_fast:
         alerts.append(
             {
                 "event": "TOO_FAST",
                 "value": round(result.syllables_per_second, 2),
-                "threshold": SYLLABLES_PER_SECOND_TOO_FAST,
+                "threshold": thresholds.syllables_per_second_too_fast,
             }
         )
 
-    if result.f0_std_hz > PITCH_STD_UNSTABLE_HZ or result.f0_jitter_hz > PITCH_JITTER_UNSTABLE_HZ:
+    if (
+        result.f0_std_hz > thresholds.pitch_std_unstable_hz
+        or result.f0_jitter_hz > thresholds.pitch_jitter_unstable_hz
+    ):
         alerts.append(
             {
                 "event": "PITCH_UNSTABLE",
                 "value": round(result.f0_std_hz, 2),
                 "jitter": round(result.f0_jitter_hz, 2),
-                "threshold": PITCH_STD_UNSTABLE_HZ,
+                "threshold": thresholds.pitch_std_unstable_hz,
             }
         )
 
-    if result.longest_silence_seconds >= LONG_SILENCE_SECONDS:
+    if result.longest_silence_seconds >= thresholds.long_silence_seconds:
         alerts.append(
             {
                 "event": "LONG_SILENCE",
                 "value": round(result.longest_silence_seconds, 2),
-                "threshold": LONG_SILENCE_SECONDS,
+                "threshold": thresholds.long_silence_seconds,
             }
         )
 

@@ -12,6 +12,19 @@ from collections import deque
 CAMERA_INDEX = 0
 WINDOW_SECONDS = 5.0
 
+# 피드백 안정화 설정
+# - MIN_FEEDBACK_HOLD_SECONDS: 한 번 표시된 피드백을 최소 이 시간만큼 유지 (깜빡임 방지)
+# - FEEDBACK_CONFIRM_SECONDS: 새로운 피드백이 이 시간만큼 연속으로 유지될 때만 교체 (디바운스)
+MIN_FEEDBACK_HOLD_SECONDS = 2.5
+FEEDBACK_CONFIRM_SECONDS = 1.0
+
+# 히스테리시스 설정 (임계값 근처 진동 방지)
+# - 점수가 ENTER 아래로 떨어지면 해당 항목 경고 시작
+# - 점수가 EXIT 위로 올라가야 경고 해제
+# - ENTER < EXIT 사이가 데드존이라 경계에서 왔다갔다해도 상태가 안 바뀜
+FEEDBACK_ENTER_THRESHOLD = 72
+FEEDBACK_EXIT_THRESHOLD = 80
+
 # 얼굴이 화면 중앙에 있어야 하는 범위
 FACE_CENTER_X_MIN = 0.35
 FACE_CENTER_X_MAX = 0.65
@@ -66,6 +79,14 @@ BODY_SWAY_BAD = 0.030
 EYE_OPEN_MIN = 0.13
 MOUTH_OPEN_GOOD_MIN = 0.03
 MOUTH_OPEN_BAD_MIN = 0.005
+
+# 손 동작 판단
+# - 손이 얼굴 근처로 올라오거나(가림) 카메라에 가까이 들이댄 경우에만 경고한다.
+# - 손을 자연스럽게 내려놓은 상태에서는 경고하지 않는다 (오탐 방지).
+# HAND_NEAR_FACE_DIST_RATIO: 손 중심-얼굴 중심 거리가 (얼굴 대각선 * 이 값) 이내면 "얼굴 가림"
+HAND_NEAR_FACE_DIST_RATIO = 0.75
+# HAND_CLOSE_SIZE_RATIO: 손 크기가 (얼굴 대각선 * 이 값) 이상이면 "카메라에 가까이 들이댐"
+HAND_CLOSE_SIZE_RATIO = 0.85
 
 
 # =========================
@@ -369,6 +390,72 @@ def compute_face_metrics_no_temporal(points):
 
 
 # =========================
+# Hands 기반 손 가림/근접 지표
+# =========================
+
+def compute_hand_metrics(multi_hand_landmarks, face_metrics):
+    """
+    손이 얼굴/몸을 가리거나 카메라에 가까이 들이댄 상태를 판단한다.
+    - 손이 안 보이거나 자연스럽게 내려놓은 상태: 가림 아님 (block=False)
+    - 손이 얼굴 근처로 올라옴 OR 손이 카메라에 가까워서 비정상적으로 큼: 가림 (block=True)
+    반환: num_hands, hand_near_face, hand_close, hand_block
+    """
+    result = {
+        "num_hands": 0,
+        "hand_near_face": False,
+        "hand_close": False,
+        "hand_block": False,
+    }
+
+    if not multi_hand_landmarks:
+        return result
+
+    face_center = face_metrics["face_center"]
+    face_width = face_metrics["face_width"]
+    face_height = face_metrics["face_height"]
+    face_diag = math.sqrt(face_width * face_width + face_height * face_height)
+
+    if face_diag <= 1e-6:
+        return result
+
+    near_face = False
+    close = False
+
+    for hand in multi_hand_landmarks:
+        xs = [lm.x for lm in hand.landmark]
+        ys = [lm.y for lm in hand.landmark]
+
+        min_x, max_x = min(xs), max(xs)
+        min_y, max_y = min(ys), max(ys)
+
+        hand_width = max_x - min_x
+        hand_height = max_y - min_y
+        hand_diag = math.sqrt(hand_width * hand_width + hand_height * hand_height)
+
+        hand_center_x = (min_x + max_x) / 2.0
+        hand_center_y = (min_y + max_y) / 2.0
+
+        dist_to_face = math.hypot(
+            hand_center_x - face_center["x"],
+            hand_center_y - face_center["y"],
+        )
+
+        # 손이 얼굴 중심 근처까지 올라옴 -> 얼굴/상체 가림
+        if dist_to_face <= HAND_NEAR_FACE_DIST_RATIO * face_diag:
+            near_face = True
+
+        # 손이 얼굴 대비 비정상적으로 큼 -> 카메라에 가까이 들이댐
+        if hand_diag >= HAND_CLOSE_SIZE_RATIO * face_diag:
+            close = True
+
+    result["num_hands"] = len(multi_hand_landmarks)
+    result["hand_near_face"] = near_face
+    result["hand_close"] = close
+    result["hand_block"] = near_face or close
+    return result
+
+
+# =========================
 # 점수 계산
 # =========================
 
@@ -391,6 +478,8 @@ def compute_scores(metric_buffer):
 
     avg_body_sway = average([m["body_sway"] for m in metric_buffer])
     avg_shoulder_tilt = average([m["shoulder_tilt"] for m in metric_buffer])
+
+    hand_block_ratio = average([1.0 if m.get("hand_block") else 0.0 for m in metric_buffer])
 
     yaw_score = score_from_penalty(normalize_penalty(avg_yaw, YAW_GOOD, YAW_BAD))
     pitch_score = score_from_penalty(normalize_penalty(avg_pitch, PITCH_GOOD, PITCH_BAD))
@@ -424,6 +513,9 @@ def compute_scores(metric_buffer):
 
     face_center_score = int(round(face_center_ratio * 100))
 
+    # 손이 가린 시간 비율이 높을수록 점수가 낮아진다.
+    hand_score = int(round((1.0 - hand_block_ratio) * 100))
+
     gaze_score = int(round(
         0.35 * gaze_ratio * 100
         + 0.25 * face_center_score
@@ -446,10 +538,11 @@ def compute_scores(metric_buffer):
     ))
 
     overall_score = int(round(
-        0.45 * gaze_score
-        + 0.30 * posture_score
-        + 0.15 * face_stability_score
+        0.40 * gaze_score
+        + 0.27 * posture_score
+        + 0.13 * face_stability_score
         + 0.10 * speaking_score
+        + 0.10 * hand_score
     ))
 
     return {
@@ -458,6 +551,7 @@ def compute_scores(metric_buffer):
         "posture_score": clamp(posture_score, 0, 100),
         "face_stability_score": clamp(face_stability_score, 0, 100),
         "speaking_score": clamp(speaking_score, 0, 100),
+        "hand_score": clamp(hand_score, 0, 100),
 
         "face_center_score": clamp(face_center_score, 0, 100),
         "yaw_score": clamp(yaw_score, 0, 100),
@@ -487,6 +581,7 @@ def empty_scores():
         "posture_score": 0,
         "face_stability_score": 0,
         "speaking_score": 0,
+        "hand_score": 100,
         "face_center_score": 0,
         "yaw_score": 0,
         "pitch_score": 0,
@@ -497,17 +592,18 @@ def empty_scores():
     }
 
 
-def generate_feedback(scores):
-    candidates = [
-        ("gaze", scores["gaze_score"]),
-        ("posture", scores["posture_score"]),
-        ("face", scores["face_stability_score"]),
-        ("speaking", scores["speaking_score"]),
-    ]
+def category_score(scores, key):
+    return {
+        "gaze": scores["gaze_score"],
+        "posture": scores["posture_score"],
+        "face": scores["face_stability_score"],
+        "speaking": scores["speaking_score"],
+        "hands": scores["hand_score"],
+    }[key]
 
-    weakest = min(candidates, key=lambda x: x[1])[0]
 
-    if weakest == "gaze" and scores["gaze_score"] < 75:
+def category_message(scores, key):
+    if key == "gaze":
         if scores["face_center_score"] < 70:
             return "Feedback: Keep your face near the center of the camera."
         if scores["yaw_score"] < 70:
@@ -516,25 +612,122 @@ def generate_feedback(scores):
             return "Feedback: Avoid looking too far down or up."
         return "Feedback: Maintain steady camera-facing gaze."
 
-    if weakest == "posture" and scores["posture_score"] < 75:
+    if key == "posture":
         if scores["shoulder_score"] < 70:
             return "Feedback: Align your shoulders more horizontally."
         if scores["body_sway_score"] < 70:
             return "Feedback: Reduce upper-body swaying."
         return "Feedback: Keep your upper body stable."
 
-    if weakest == "face" and scores["face_stability_score"] < 75:
+    if key == "face":
         if scores["roll_score"] < 70:
             return "Feedback: Keep your head from tilting."
         return "Feedback: Keep your face position stable."
 
-    if weakest == "speaking" and scores["speaking_score"] < 75:
+    if key == "speaking":
         return "Feedback: Mouth movement is low; check if you are speaking clearly."
 
-    if scores["overall_score"] >= 85:
-        return "Feedback: Good interview posture and gaze stability."
+    if key == "hands":
+        if scores["hand_score"] < 40:
+            return "Feedback: Lower your hands; they block the camera."
+        return "Feedback: Lower your hands and reset your posture."
 
     return "Feedback: Overall stable, but slight improvement is possible."
+
+
+class FeedbackEngine:
+    """
+    카테고리(gaze/posture/face/speaking)별로 히스테리시스를 적용해
+    임계값 근처에서 피드백이 진동하는 것을 막는다.
+    - 점수가 ENTER 아래로 떨어지면 그 항목을 '경고 중' 상태로 켠다.
+    - 점수가 EXIT 위로 올라가야 경고를 끈다 (ENTER < EXIT 사이는 데드존).
+    - 현재 경고 중인 항목들 중 가장 약한 항목으로 메시지를 만든다.
+    """
+
+    CATEGORY_KEYS = ["gaze", "posture", "face", "speaking", "hands"]
+
+    def __init__(self, enter_threshold, exit_threshold):
+        self.enter_threshold = enter_threshold
+        self.exit_threshold = exit_threshold
+        self.warning = {key: False for key in self.CATEGORY_KEYS}
+
+    def update(self, scores):
+        for key in self.CATEGORY_KEYS:
+            s = category_score(scores, key)
+            if self.warning[key]:
+                if s >= self.exit_threshold:
+                    self.warning[key] = False
+            else:
+                if s < self.enter_threshold:
+                    self.warning[key] = True
+
+        active = [
+            (key, category_score(scores, key))
+            for key in self.CATEGORY_KEYS
+            if self.warning[key]
+        ]
+
+        if not active:
+            if scores["overall_score"] >= 85:
+                return "Feedback: Good interview posture and gaze stability."
+            return "Feedback: Overall stable, but slight improvement is possible."
+
+        weakest = min(active, key=lambda x: x[1])[0]
+        return category_message(scores, weakest)
+
+
+# =========================
+# 피드백 안정화
+# =========================
+
+class FeedbackStabilizer:
+    """
+    매 프레임 바뀌는 raw 피드백을 받아서, 화면에 표시할 안정화된 피드백을 돌려준다.
+    - 현재 피드백은 최소 MIN_FEEDBACK_HOLD_SECONDS 동안 유지된다.
+    - 그 시간이 지난 뒤에도, 새 후보가 FEEDBACK_CONFIRM_SECONDS 동안 연속으로
+      유지될 때에만 실제로 교체된다 (순간적인 깜빡임 무시).
+    """
+
+    def __init__(self, min_hold_seconds, confirm_seconds):
+        self.min_hold_seconds = min_hold_seconds
+        self.confirm_seconds = confirm_seconds
+
+        self.current = None          # 현재 화면에 표시 중인 피드백
+        self.current_since = 0.0     # 현재 피드백이 표시되기 시작한 시각
+
+        self.candidate = None        # 교체 대기 중인 새 후보
+        self.candidate_since = 0.0   # 후보가 처음 등장한 시각
+
+    def update(self, raw_feedback, now):
+        # 최초 1회는 즉시 표시
+        if self.current is None:
+            self.current = raw_feedback
+            self.current_since = now
+            self.candidate = None
+            return self.current
+
+        # 지금 들어온 피드백이 이미 표시 중인 것과 같으면 후보 상태 초기화
+        if raw_feedback == self.current:
+            self.candidate = None
+            return self.current
+
+        # 최소 유지 시간을 아직 못 채웠으면 무조건 현재 유지
+        if now - self.current_since < self.min_hold_seconds:
+            return self.current
+
+        # 새 후보 추적 (디바운스)
+        if raw_feedback != self.candidate:
+            self.candidate = raw_feedback
+            self.candidate_since = now
+            return self.current
+
+        # 같은 후보가 confirm_seconds 동안 유지되면 교체
+        if now - self.candidate_since >= self.confirm_seconds:
+            self.current = self.candidate
+            self.current_since = now
+            self.candidate = None
+
+        return self.current
 
 
 # =========================
@@ -574,7 +767,7 @@ def draw_panel(frame, scores, feedback, fps):
     panel_x = 20
     panel_y = 20
     panel_w = 360
-    panel_h = 330
+    panel_h = 375
 
     cv2.rectangle(
         overlay,
@@ -604,11 +797,12 @@ def draw_panel(frame, scores, feedback, fps):
     draw_bar(frame, "Posture", scores["posture_score"], panel_x + 20, y + 90)
     draw_bar(frame, "FaceStable", scores["face_stability_score"], panel_x + 20, y + 135)
     draw_bar(frame, "Speaking", scores["speaking_score"], panel_x + 20, y + 180)
+    draw_bar(frame, "Hands", scores["hand_score"], panel_x + 20, y + 225)
 
     cv2.putText(
         frame,
         f"FPS: {fps:.1f}",
-        (panel_x + 20, panel_y + 295),
+        (panel_x + 20, panel_y + 340),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.55,
         (200, 200, 200),
@@ -618,8 +812,8 @@ def draw_panel(frame, scores, feedback, fps):
 
     cv2.putText(
         frame,
-        feedback[:45],
-        (panel_x + 20, panel_y + 318),
+        feedback[:55],
+        (panel_x + 20, panel_y + 363),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.5,
         (0, 255, 255),
@@ -655,7 +849,7 @@ def draw_debug_values(frame, scores):
         f"FaceCenter: {scores['face_center_score']}",
         f"Yaw: {scores['yaw_score']}  Pitch: {scores['pitch_score']}  Roll: {scores['roll_score']}",
         f"Eye: {scores['eye_score']}  Shoulder: {scores['shoulder_score']}",
-        f"BodySway: {scores['body_sway_score']}",
+        f"BodySway: {scores['body_sway_score']}  Hand: {scores['hand_score']}",
     ]
 
     for i, line in enumerate(debug_lines):
@@ -678,6 +872,7 @@ def draw_debug_values(frame, scores):
 def main():
     mp_pose = mp.solutions.pose
     mp_face_mesh = mp.solutions.face_mesh
+    mp_hands = mp.solutions.hands
     mp_drawing = mp.solutions.drawing_utils
 
     pose = mp_pose.Pose(
@@ -696,6 +891,14 @@ def main():
         min_tracking_confidence=0.5,
     )
 
+    hands = mp_hands.Hands(
+        static_image_mode=False,
+        max_num_hands=2,
+        model_complexity=0,
+        min_detection_confidence=0.5,
+        min_tracking_confidence=0.5,
+    )
+
     cap = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_AVFOUNDATION)
 
     if not cap.isOpened():
@@ -705,6 +908,16 @@ def main():
     prev_pose_points = None
     prev_face_points = None
     metric_buffer = deque()
+
+    feedback_engine = FeedbackEngine(
+        FEEDBACK_ENTER_THRESHOLD,
+        FEEDBACK_EXIT_THRESHOLD,
+    )
+
+    feedback_stabilizer = FeedbackStabilizer(
+        MIN_FEEDBACK_HOLD_SECONDS,
+        FEEDBACK_CONFIRM_SECONDS,
+    )
 
     print("Pose + FaceMesh interview estimator started.")
     print("Press 'q' to quit.")
@@ -723,6 +936,7 @@ def main():
 
         pose_result = pose.process(rgb)
         face_result = face_mesh.process(rgb)
+        hands_result = hands.process(rgb)
 
         fps = 1.0 / max(current_time - prev_time, 1e-6)
         prev_time = current_time
@@ -760,10 +974,26 @@ def main():
             pose_metrics = compute_pose_metrics(pose_points, prev_pose_points)
             face_metrics = compute_face_metrics(face_points, prev_face_points)
 
+            multi_hand_landmarks = hands_result.multi_hand_landmarks
+            hand_metrics = compute_hand_metrics(multi_hand_landmarks, face_metrics)
+
+            # 손이 가림으로 판단된 경우에만 빨간색, 평소엔 연한 색으로 표시
+            if multi_hand_landmarks:
+                hand_color = (0, 0, 255) if hand_metrics["hand_block"] else (160, 160, 160)
+                for hand_landmarks in multi_hand_landmarks:
+                    mp_drawing.draw_landmarks(
+                        frame,
+                        hand_landmarks,
+                        mp_hands.HAND_CONNECTIONS,
+                        landmark_drawing_spec=mp_drawing.DrawingSpec(color=hand_color, thickness=1, circle_radius=1),
+                        connection_drawing_spec=mp_drawing.DrawingSpec(color=hand_color, thickness=1),
+                    )
+
             combined_metrics = {
                 "time": current_time,
                 **pose_metrics,
                 **face_metrics,
+                **hand_metrics,
             }
 
             metric_buffer.append(combined_metrics)
@@ -772,7 +1002,8 @@ def main():
                 metric_buffer.popleft()
 
             scores = compute_scores(metric_buffer)
-            feedback = generate_feedback(scores)
+            raw_feedback = feedback_engine.update(scores)
+            feedback = feedback_stabilizer.update(raw_feedback, current_time)
 
             draw_face_guides(frame, face_metrics)
             draw_panel(frame, scores, feedback, fps)
@@ -807,6 +1038,7 @@ def main():
     cap.release()
     pose.close()
     face_mesh.close()
+    hands.close()
     cv2.destroyAllWindows()
 
 

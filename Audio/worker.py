@@ -6,7 +6,13 @@ from typing import Any
 
 from fastapi import WebSocket
 
-from Audio.config import PROCESS_INTERVAL_SECONDS, SAMPLE_RATE, STATUS_INTERVAL_SECONDS, WINDOW_SECONDS
+from Audio.config import (
+    PROCESS_INTERVAL_SECONDS,
+    SAMPLE_RATE,
+    STATUS_INTERVAL_SECONDS,
+    WINDOW_SECONDS,
+    get_thresholds,
+)
 from Audio.dsp import analyze_window, decode_audio_frame
 from Audio.events import AlertCooldown, build_alerts, build_status
 from Audio.models import AudioFrame
@@ -51,7 +57,9 @@ async def analysis_worker(
                 int(runtime_config["vad_level"]),
             )
 
-            for alert in build_alerts(result):
+            # Resolve thresholds each cycle so a mid-stream persona change applies.
+            thresholds = get_thresholds(runtime_config.get("persona"))
+            for alert in build_alerts(result, thresholds):
                 if cooldown.allow(alert["event"]):
                     sent = await send_json_safe(websocket, send_lock, alert)
                     if not sent:
