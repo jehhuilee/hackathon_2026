@@ -39,10 +39,19 @@ def generate_questions(data: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 def evaluate_answer(data: Dict[str, Any]) -> Dict[str, Any]:
+    # The candidate profile is passed through so the evaluator can both correct
+    # context-specific transcription errors (corrected_transcript) and judge the
+    # answer against the role — all in a single LLM call.
+    tech_stack = data.get("tech_stack", [])
+    if isinstance(tech_stack, (list, tuple)):
+        tech_stack = ", ".join(str(t) for t in tech_stack)
     prompt = render_prompt(
         "answer_evaluation.md",
         {
             "difficulty_instruction": eval_instruction(data.get("difficulty")),
+            "job_role": data.get("job_role", ""),
+            "company": data.get("company", ""),
+            "tech_stack": tech_stack,
             "question": data.get("question", ""),
             "intent": data.get("intent", ""),
             "answer_text": data.get("answer_text", ""),
@@ -54,6 +63,40 @@ def evaluate_answer(data: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("Invalid evaluation response format")
     return normalize_evaluation_result(payload)
+
+
+def generate_overall_feedback(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Synthesize one comprehensive, session-wide feedback from all answers.
+
+    ``data`` carries the candidate profile plus a pre-built ``qa_block`` string
+    (each question, its transcript, and per-answer scores). Returns a single
+    integrated assessment instead of per-question feedback.
+    """
+    tech_stack = data.get("tech_stack", [])
+    if isinstance(tech_stack, (list, tuple)):
+        tech_stack = ", ".join(str(t) for t in tech_stack)
+    prompt = render_prompt(
+        "overall_feedback.md",
+        {
+            "job_role": data.get("job_role", ""),
+            "company": data.get("company", ""),
+            "tech_stack": tech_stack,
+            "qa_block": data.get("qa_block", ""),
+        },
+    )
+    response_text = complete(prompt)
+    payload = parse_json_response(response_text)
+    if not isinstance(payload, dict):
+        raise ValueError("Invalid overall feedback response format")
+
+    priorities = payload.get("improvement_priorities") or []
+    if not isinstance(priorities, list):
+        priorities = [str(priorities)]
+    return {
+        "overall_feedback": str(payload.get("overall_feedback", "")).strip(),
+        "improvement_priorities": [str(p).strip() for p in priorities if str(p).strip()],
+        "action_plan": str(payload.get("action_plan", "")).strip(),
+    }
 
 
 def generate_followups(data: Dict[str, Any]) -> List[Dict[str, Any]]:

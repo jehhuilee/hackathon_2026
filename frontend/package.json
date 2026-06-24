@@ -7,12 +7,17 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "oxlint",
+    "test": "node --test \"src/**/*.test.mjs\"",
     "preview": "vite preview"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^0.10.35",
+    "@react-three/drei": "^10.7.7",
+    "@react-three/fiber": "^9.6.1",
+    "microsoft-cognitiveservices-speech-sdk": "^1.50.0",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "react-dom": "^19.2.7",
+    "three": "^0.184.0"
   },
   "devDependencies": {
     "@types/react": "^19.2.17",

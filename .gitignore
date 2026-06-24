@@ -36,3 +36,6 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .venv/
+
+# claude code personal settings
+.claude/settings.local.json

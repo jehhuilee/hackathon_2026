@@ -123,6 +123,21 @@ def get_question(question_id: int) -> Optional[Dict[str, Any]]:
         return dict(row) if row else None
 
 
+def get_session(session_id: int) -> Optional[Dict[str, Any]]:
+    """Return a session's profile (job_role/company/tech_stack/resume_text).
+
+    ``tech_stack`` is decoded back into a list. Used to build the STT context
+    prompt and to give the evaluator the same profile context for correction.
+    """
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
+        if not row:
+            return None
+        data = dict(row)
+        data["tech_stack"] = json.loads(data.get("tech_stack") or "[]")
+        return data
+
+
 def create_answer(
     question_id: int,
     transcript: str,

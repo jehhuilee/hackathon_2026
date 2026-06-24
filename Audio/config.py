@@ -8,6 +8,11 @@ CHANNELS = 1
 WINDOW_SECONDS = 3.0
 PROCESS_INTERVAL_SECONDS = 0.20
 STATUS_INTERVAL_SECONDS = 0.50
+# Pitch (PYIN) costs ~hundreds of ms — far more than PROCESS_INTERVAL — so it is
+# refreshed on this slower cadence in a background task instead of every cycle.
+# F0 stats over a 3s window barely change within 200ms, so 1s loses no real
+# signal while keeping the cheap metrics (rate/silence/VAD) fully responsive.
+PITCH_INTERVAL_SECONDS = 1.0
 
 # Browser chunks are usually 50-100 ms. Keep the queue bounded to protect
 # latency under CPU pressure.

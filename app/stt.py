@@ -21,7 +21,7 @@ def _backend() -> str:
     return os.getenv("STT_BACKEND", "openai").strip().lower()
 
 
-def _transcribe_openai(audio_bytes: bytes, filename: str) -> str:
+def _transcribe_openai(audio_bytes: bytes, filename: str, prompt: str = "") -> str:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise ValueError("OPENAI_API_KEY is required for STT_BACKEND=openai")
@@ -35,11 +35,16 @@ def _transcribe_openai(audio_bytes: bytes, filename: str) -> str:
     # no audio endpoint, so we never reuse it for transcription.
     client = OpenAI(api_key=api_key)
     model = os.getenv("STT_OPENAI_MODEL", "whisper-1")
-    response = client.audio.transcriptions.create(
-        model=model,
-        file=(filename, audio_bytes),
-        language=os.getenv("STT_LANGUAGE", "ko"),
-    )
+    kwargs = {
+        "model": model,
+        "file": (filename, audio_bytes),
+        "language": os.getenv("STT_LANGUAGE", "ko"),
+    }
+    # Bias decoding toward the candidate's domain (company/role/tech terms) so
+    # proper nouns and jargon are transcribed correctly at no extra latency.
+    if prompt:
+        kwargs["prompt"] = prompt
+    response = client.audio.transcriptions.create(**kwargs)
     return (response.text or "").strip()
 
 
@@ -59,15 +64,20 @@ def _get_local_model():
     return _local_model
 
 
-def _transcribe_local(audio_bytes: bytes, filename: str) -> str:
+def _transcribe_local(audio_bytes: bytes, filename: str, prompt: str = "") -> str:
     model = _get_local_model()
     suffix = Path(filename).suffix or ".webm"
     # faster-whisper decodes container formats (webm/opus) via PyAV from a path.
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
         tmp.write(audio_bytes)
         tmp_path = tmp.name
+    kwargs = {"language": os.getenv("STT_LANGUAGE", "ko")}
+    # Same context-biasing idea as the OpenAI path; faster-whisper names it
+    # ``initial_prompt`` instead of ``prompt``.
+    if prompt:
+        kwargs["initial_prompt"] = prompt
     try:
-        segments, _info = model.transcribe(tmp_path, language=os.getenv("STT_LANGUAGE", "ko"))
+        segments, _info = model.transcribe(tmp_path, **kwargs)
         return " ".join(segment.text.strip() for segment in segments).strip()
     finally:
         try:
@@ -76,10 +86,15 @@ def _transcribe_local(audio_bytes: bytes, filename: str) -> str:
             pass
 
 
-def transcribe(audio_bytes: bytes, filename: str = "answer.webm") -> str:
-    """Transcribe a full recorded answer to text using the configured backend."""
+def transcribe(audio_bytes: bytes, filename: str = "answer.webm", prompt: str = "") -> str:
+    """Transcribe a full recorded answer to text using the configured backend.
+
+    ``prompt`` is an optional context string (company/role/tech-stack terms) used
+    to bias decoding toward the candidate's domain — this is the cheapest layer
+    of context correction since it adds no extra round trip.
+    """
     if not audio_bytes:
         return ""
     if _backend() == "local":
-        return _transcribe_local(audio_bytes, filename)
-    return _transcribe_openai(audio_bytes, filename)
+        return _transcribe_local(audio_bytes, filename, prompt)
+    return _transcribe_openai(audio_bytes, filename, prompt)

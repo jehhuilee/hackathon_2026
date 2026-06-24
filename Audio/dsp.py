@@ -125,10 +125,21 @@ def estimate_recent_speech_ratio(audio: np.ndarray, sample_rate: int, vad: webrt
     return float(speech_frames / total_frames) if total_frames else 0.0
 
 
-def analyze_window(audio: np.ndarray, sample_rate: int, vad_level: int) -> AnalysisResult:
-    """Run all DSP analyzers over the current sliding window."""
+def analyze_window(
+    audio: np.ndarray,
+    sample_rate: int,
+    vad_level: int,
+    pitch: tuple[float, float, float] | None = None,
+) -> AnalysisResult:
+    """Run the DSP analyzers over the current sliding window.
+
+    ``pitch`` lets the caller supply a previously computed (f0_mean, f0_std,
+    f0_jitter) so the expensive PYIN pass can run on a slower cadence than the
+    cheap rate/silence/VAD metrics. When ``None`` the pitch is computed inline
+    (original behaviour, unchanged output).
+    """
     vad = webrtcvad.Vad(vad_level)
-    f0_mean, f0_std, f0_jitter = estimate_pitch(audio, sample_rate)
+    f0_mean, f0_std, f0_jitter = pitch if pitch is not None else estimate_pitch(audio, sample_rate)
 
     return AnalysisResult(
         syllables_per_second=estimate_syllable_rate(audio, sample_rate),

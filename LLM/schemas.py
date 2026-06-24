@@ -33,4 +33,8 @@ def normalize_evaluation_result(payload: Dict[str, Any]) -> Dict[str, Any]:
         "weakness": str(payload.get("weakness", "")),
         "improvement": str(payload.get("improvement", "")),
         "sample_answer": str(payload.get("sample_answer", "")),
+        # Context-corrected transcript produced in the same call as the
+        # evaluation (no extra round trip). Empty when the model omits it; the
+        # caller falls back to the raw STT transcript in that case.
+        "corrected_transcript": str(payload.get("corrected_transcript", "")),
     }

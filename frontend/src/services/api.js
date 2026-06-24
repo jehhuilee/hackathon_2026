@@ -39,12 +39,15 @@ export async function createSession(profile) {
 }
 
 // Upload a recorded answer (webm blob) + collected metrics; returns transcript + evaluation.
-export async function submitAnswer({ questionId, audioBlob, voiceMetrics, poseMetrics }) {
+// recordingId links to pre-transcribed STT chunks on the server so the Whisper
+// wait is skipped when chunks are available (they were uploaded during recording).
+export async function submitAnswer({ questionId, audioBlob, voiceMetrics, poseMetrics, recordingId }) {
   const form = new FormData();
   form.append("question_id", String(questionId));
   form.append("audio", audioBlob, "answer.webm");
   form.append("voice_metrics", JSON.stringify(voiceMetrics || {}));
   form.append("pose_metrics", JSON.stringify(poseMetrics || {}));
+  if (recordingId) form.append("recording_id", recordingId);
 
   const response = await fetch(`${BASE_URL}/api/answers`, {
     method: "POST",
@@ -56,6 +59,13 @@ export async function submitAnswer({ questionId, audioBlob, voiceMetrics, poseMe
 // Fetch the aggregated report for a session.
 export async function getReport(sessionId) {
   const response = await fetch(`${BASE_URL}/api/sessions/${sessionId}/report`);
+  return handle(response);
+}
+
+// Fetch the single comprehensive, session-wide feedback (LLM-synthesized).
+// Returns { overall_feedback, improvement_priorities, action_plan, answered_count }.
+export async function getOverallFeedback(sessionId) {
+  const response = await fetch(`${BASE_URL}/api/sessions/${sessionId}/overall_feedback`);
   return handle(response);
 }
 

@@ -9,7 +9,12 @@
 //   3) hysteresis + minimum-hold stabilizer (kills feedback flicker)
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FilesetResolver, PoseLandmarker, HandLandmarker } from "@mediapipe/tasks-vision";
+import {
+  FilesetResolver,
+  PoseLandmarker,
+  HandLandmarker,
+  FaceLandmarker,
+} from "@mediapipe/tasks-vision";
 
 // =========================
 // 설정값 (main.py와 동일한 의미)
@@ -35,6 +40,18 @@ const EXIT_THRESHOLD = 80;
 // 단일프레임 raw 임계값 (점수화에 사용)
 const POSTURE_MOVEMENT_BAD = 0.035;
 const SHOULDER_TILT_BAD = 0.14;
+
+// 눈 감김 / 시선 이탈 (FaceLandmarker blendshape 기반, 0~1)
+// - eyeBlink* 가 이 값 이상이면 눈을 감은 것으로 본다.
+const EYE_CLOSED_THRESHOLD = 0.5;
+// 시선 이탈 판정.
+// 기존엔 eyeLook* 8개의 단순 최댓값을 0.28과 비교했는데, 정면을 봐도 머리 각도·
+// 모델 보정 탓에 개별 eyeLook* 가 쉽게 0.3을 넘어 오탐이 잦았다. 그래서
+//   (1) 양안의 "같은 물리적 방향" 성분을 평균내 노이즈를 상쇄하고(대향 쌍),
+//   (2) 임계값을 현실적인 값으로 올리고,
+//   (3) 단일 프레임 튐을 막기 위해 일정 시간 지속될 때만 이탈로 본다.
+const GAZE_AWAY_THRESHOLD = 0.5;
+const GAZE_HOLD_MS = 500; // 이 시간 이상 연속 이탈해야 경고 (오탐 제거)
 
 function distance(a, b) {
   if (!a || !b) return 0;
@@ -79,10 +96,53 @@ function computeHandBlock(handLandmarksList, faceCenter, faceDiag) {
 }
 
 // =========================
+// 눈 감김 / 시선 이탈 (FaceLandmarker blendshape 기반)
+// =========================
+
+// faceBlendshapes -> { hasFace, eyeClosed, gazeAway, gazeDev, eyeBlink }
+function computeFaceSignals(faceResult) {
+  const shapesList = faceResult?.faceBlendshapes;
+  if (!shapesList || shapesList.length === 0) {
+    return { hasFace: false, eyeClosed: false, gazeAway: false, gazeDev: 0, eyeBlink: 0 };
+  }
+
+  const scores = {};
+  for (const cat of shapesList[0].categories) {
+    scores[cat.categoryName] = cat.score;
+  }
+  const g = (name) => scores[name] || 0;
+
+  const eyeBlink = (g("eyeBlinkLeft") + g("eyeBlinkRight")) / 2;
+
+  // 시선 편차: 정면을 보면 모든 eyeLook* 가 0에 가깝다. 한쪽을 보면 한 눈은 안쪽,
+  // 다른 눈은 바깥쪽이 동시에 커진다 → "같은 물리적 방향" 성분을 양안 평균으로 묶으면
+  // 좌우 비대칭 노이즈가 상쇄돼 단일 최댓값보다 훨씬 안정적이다.
+  const horizontal = Math.max(
+    (g("eyeLookOutLeft") + g("eyeLookInRight")) / 2, // 피험자 기준 왼쪽 응시
+    (g("eyeLookInLeft") + g("eyeLookOutRight")) / 2, // 피험자 기준 오른쪽 응시
+  );
+  const vertical = Math.max(
+    (g("eyeLookUpLeft") + g("eyeLookUpRight")) / 2,
+    (g("eyeLookDownLeft") + g("eyeLookDownRight")) / 2,
+  );
+  const gazeDev = Math.max(horizontal, vertical);
+
+  return {
+    hasFace: true,
+    eyeClosed: eyeBlink >= EYE_CLOSED_THRESHOLD,
+    // 눈을 감고 있으면 eyeLookDown 등이 같이 커지므로, 감김 상태에서는 시선 판정을 보류.
+    // (지속 시간 조건은 호출부에서 적용 — 여기서는 단일 프레임 raw 판정만 한다.)
+    gazeAway: eyeBlink < EYE_CLOSED_THRESHOLD && gazeDev >= GAZE_AWAY_THRESHOLD,
+    gazeDev: Number(gazeDev.toFixed(3)),
+    eyeBlink: Number(eyeBlink.toFixed(3)),
+  };
+}
+
+// =========================
 // 단일 프레임 raw 지표
 // =========================
 
-function computeFrameMetrics(landmarks, prevLandmarks, handLandmarksList) {
+function computeFrameMetrics(landmarks, prevLandmarks, handLandmarksList, faceSignals) {
   const nose = landmarks[0];
   const leftShoulder = landmarks[11];
   const rightShoulder = landmarks[12];
@@ -122,12 +182,18 @@ function computeFrameMetrics(landmarks, prevLandmarks, handLandmarksList) {
 
   const handBlock = computeHandBlock(handLandmarksList, faceCenter, faceDiag);
 
+  const signals = faceSignals || { hasFace: false, eyeClosed: false, gazeAway: false, gazeDev: 0 };
+
   return {
     faceVisible,
     postureMovement: Number(postureMovement.toFixed(4)),
     handMovement: Number(handMovement.toFixed(4)),
     shoulderTilt: Number(shoulderTilt.toFixed(4)),
     handBlock,
+    eyeClosed: signals.eyeClosed,
+    gazeAway: signals.gazeAway,
+    gazeDev: signals.gazeDev || 0,
+    faceTracked: signals.hasFace,
   };
 }
 
@@ -152,6 +218,8 @@ function computeScores(window) {
       postureScore: 100,
       shoulderScore: 100,
       handScore: 100,
+      eyeScore: 100,
+      gazeScore: 100,
     };
   }
 
@@ -159,6 +227,11 @@ function computeScores(window) {
   const avgPosture = average(window, "postureMovement");
   const avgShoulder = average(window, "shoulderTilt");
   const handBlockRatio = ratio(window, (r) => r.handBlock);
+
+  // 눈/시선은 얼굴이 추적된 프레임만 대상으로 비율 계산 (얼굴 미검출 프레임은 제외)
+  const faced = window.filter((r) => r.faceTracked);
+  const eyeClosedRatio = ratio(faced, (r) => r.eyeClosed);
+  const gazeAwayRatio = ratio(faced, (r) => r.gazeAway);
 
   // 0(나쁨)~100(좋음). 임계값을 넘으면 0점으로 수렴.
   const postureScore = Math.round(
@@ -169,19 +242,24 @@ function computeScores(window) {
   );
   const handScore = Math.round(100 * (1 - handBlockRatio));
   const faceCenterScore = Math.round(faceVisibleRatio * 100);
+  // 얼굴이 한 번도 추적 안 됐으면 눈/시선은 판단 보류 -> 만점 처리(오탐 방지)
+  const eyeScore = faced.length ? Math.round(100 * (1 - eyeClosedRatio)) : 100;
+  const gazeScore = faced.length ? Math.round(100 * (1 - gazeAwayRatio)) : 100;
 
-  return { faceCenterScore, postureScore, shoulderScore, handScore };
+  return { faceCenterScore, postureScore, shoulderScore, handScore, eyeScore, gazeScore };
 }
 
 // =========================
 // 히스테리시스 기반 피드백 선택 (main.py FeedbackEngine 포팅)
 // =========================
 
-const CATEGORY_KEYS = ["face", "posture", "shoulder", "hands"];
+const CATEGORY_KEYS = ["face", "eye", "gaze", "posture", "shoulder", "hands"];
 
 function categoryScore(scores, key) {
   return {
     face: scores.faceCenterScore,
+    eye: scores.eyeScore,
+    gaze: scores.gazeScore,
     posture: scores.postureScore,
     shoulder: scores.shoulderScore,
     hands: scores.handScore,
@@ -190,6 +268,8 @@ function categoryScore(scores, key) {
 
 function categoryMessage(scores, key) {
   if (key === "face") return "얼굴이 잘 보이지 않습니다. 화면 중앙을 바라보세요.";
+  if (key === "eye") return "눈이 자주 감깁니다. 눈을 크게 뜨고 카메라를 바라보세요.";
+  if (key === "gaze") return "시선이 다른 곳을 향합니다. 카메라(정면)를 바라보세요.";
   if (key === "posture") return "상체 움직임이 큽니다. 자세를 안정적으로 유지하세요.";
   if (key === "shoulder") return "어깨 기울어짐이 큽니다. 몸을 정면으로 맞춰보세요.";
   if (key === "hands") {
@@ -200,7 +280,14 @@ function categoryMessage(scores, key) {
 }
 
 function createFeedbackEngine() {
-  const warning = { face: false, posture: false, shoulder: false, hands: false };
+  const warning = {
+    face: false,
+    eye: false,
+    gaze: false,
+    posture: false,
+    shoulder: false,
+    hands: false,
+  };
 
   return function update(scores) {
     for (const key of CATEGORY_KEYS) {
@@ -267,6 +354,10 @@ const EMPTY_METRICS = {
   handMovement: 0,
   shoulderTilt: 0,
   handBlock: false,
+  eyeClosed: false,
+  gazeAway: false,
+  gazeDev: 0,
+  faceTracked: false,
 };
 
 export function useRecorder() {
@@ -276,11 +367,13 @@ export function useRecorder() {
   const recordedChunksRef = useRef([]);
   const poseLandmarkerRef = useRef(null);
   const handLandmarkerRef = useRef(null);
+  const faceLandmarkerRef = useRef(null);
   const animationFrameRef = useRef(null);
   const lastVideoTimeRef = useRef(-1);
   const lastLandmarksRef = useRef(null);
   const poseLogRef = useRef([]);
   const isRecordingRef = useRef(false);
+  const gazeAwaySinceRef = useRef(0); // 시선 이탈이 시작된 시각 (지속 시간 판정용)
 
   // 안정화 파이프라인 상태
   const windowRef = useRef([]); // 최근 WINDOW_MS 동안의 프레임 지표
@@ -294,8 +387,8 @@ export function useRecorder() {
   const [statusMessage, setStatusMessage] = useState("카메라를 시작하세요.");
 
   const initLandmarkers = useCallback(async () => {
-    if (poseLandmarkerRef.current && handLandmarkerRef.current) return;
-    setStatusMessage("포즈/손 분석 모델을 불러오는 중입니다.");
+    if (poseLandmarkerRef.current && handLandmarkerRef.current && faceLandmarkerRef.current) return;
+    setStatusMessage("포즈/손/얼굴 분석 모델을 불러오는 중입니다.");
     const vision = await FilesetResolver.forVisionTasks(
       "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm"
     );
@@ -321,6 +414,19 @@ export function useRecorder() {
         numHands: 2,
       });
     }
+    if (!faceLandmarkerRef.current) {
+      // 눈 감김/시선 검출을 위해 blendshape 출력을 켠다.
+      faceLandmarkerRef.current = await FaceLandmarker.createFromOptions(vision, {
+        baseOptions: {
+          modelAssetPath:
+            "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task",
+          delegate: "GPU",
+        },
+        runningMode: "VIDEO",
+        numFaces: 1,
+        outputFaceBlendshapes: true,
+      });
+    }
     setStatusMessage("분석 모델 준비 완료.");
   }, []);
 
@@ -329,6 +435,7 @@ export function useRecorder() {
       const video = videoRef.current;
       const poseLandmarker = poseLandmarkerRef.current;
       const handLandmarker = handLandmarkerRef.current;
+      const faceLandmarker = faceLandmarkerRef.current;
       if (!video || !poseLandmarker || video.readyState < 2) {
         animationFrameRef.current = requestAnimationFrame(analyze);
         return;
@@ -351,7 +458,23 @@ export function useRecorder() {
             }
           }
 
-          const frame = computeFrameMetrics(landmarks, lastLandmarksRef.current, handLandmarksList);
+          // 얼굴 blendshape -> 눈 감김/시선 (실패해도 무시)
+          let faceSignals = null;
+          if (faceLandmarker) {
+            try {
+              const faceResult = faceLandmarker.detectForVideo(video, now);
+              faceSignals = computeFaceSignals(faceResult);
+            } catch {
+              faceSignals = null;
+            }
+          }
+
+          const frame = computeFrameMetrics(
+            landmarks,
+            lastLandmarksRef.current,
+            handLandmarksList,
+            faceSignals
+          );
 
           // 시간 윈도우 갱신
           const win = windowRef.current;
@@ -362,7 +485,18 @@ export function useRecorder() {
           const rawFeedback = feedbackEngineRef.current(scores);
           const stableFeedback = feedbackStabilizerRef.current(rawFeedback, now);
 
-          setLiveMetrics(frame);
+          // 시선 이탈 지속 시간 판정: raw gazeAway가 GAZE_HOLD_MS 이상 연속될 때만
+          // liveMetrics에 노출해 단일 프레임 오탐으로 토스트가 뜨는 것을 막는다.
+          if (frame.gazeAway) {
+            if (!gazeAwaySinceRef.current) gazeAwaySinceRef.current = now;
+          } else {
+            gazeAwaySinceRef.current = 0;
+          }
+          const gazeAwaySustained =
+            gazeAwaySinceRef.current > 0 && now - gazeAwaySinceRef.current >= GAZE_HOLD_MS;
+
+          // liveMetrics는 지속 판정값을 쓰고, poseLog(요약 비율 계산용)는 raw를 유지한다.
+          setLiveMetrics({ ...frame, gazeAway: gazeAwaySustained });
           setLiveFeedback(stableFeedback);
 
           if (isRecordingRef.current) {
@@ -407,6 +541,7 @@ export function useRecorder() {
     feedbackEngineRef.current = createFeedbackEngine();
     feedbackStabilizerRef.current = createFeedbackStabilizer();
     lastLandmarksRef.current = null;
+    gazeAwaySinceRef.current = 0;
     setIsCameraOn(false);
     setLiveFeedback("대기 중");
     setStatusMessage("카메라가 종료되었습니다.");
@@ -479,6 +614,13 @@ function summarizePose(log) {
   const handBlockRatio = Number(
     (log.filter((row) => row.handBlock).length / log.length).toFixed(2)
   );
+  const faced = log.filter((row) => row.faceTracked);
+  const eyeClosedRatio = faced.length
+    ? Number((faced.filter((row) => row.eyeClosed).length / faced.length).toFixed(2))
+    : 0;
+  const gazeAwayRatio = faced.length
+    ? Number((faced.filter((row) => row.gazeAway).length / faced.length).toFixed(2))
+    : 0;
   return {
     sample_count: log.length,
     face_visible_ratio: faceVisibleRatio,
@@ -486,5 +628,7 @@ function summarizePose(log) {
     avg_hand_movement: avg("handMovement"),
     avg_shoulder_tilt: avg("shoulderTilt"),
     hand_block_ratio: handBlockRatio,
+    eye_closed_ratio: eyeClosedRatio,
+    gaze_away_ratio: gazeAwayRatio,
   };
 }
