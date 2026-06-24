@@ -15,8 +15,8 @@ WINDOW_SECONDS = 5.0
 # 피드백 안정화 설정
 # - MIN_FEEDBACK_HOLD_SECONDS: 한 번 표시된 피드백을 최소 이 시간만큼 유지 (깜빡임 방지)
 # - FEEDBACK_CONFIRM_SECONDS: 새로운 피드백이 이 시간만큼 연속으로 유지될 때만 교체 (디바운스)
-MIN_FEEDBACK_HOLD_SECONDS = 2.5
-FEEDBACK_CONFIRM_SECONDS = 1.0
+MIN_FEEDBACK_HOLD_SECONDS = 0.8
+FEEDBACK_CONFIRM_SECONDS = 0.3
 
 # 히스테리시스 설정 (임계값 근처 진동 방지)
 # - 점수가 ENTER 아래로 떨어지면 해당 항목 경고 시작
@@ -61,8 +61,9 @@ YAW_BAD = 0.070
 PITCH_GOOD = 0.005
 PITCH_BAD = 0.060
 
-ROLL_GOOD = 0.010
-ROLL_BAD = 0.060
+# roll은 두 눈을 잇는 선의 기울기 각도(도, degree)로 측정한다. 얼굴 크기와 무관.
+ROLL_GOOD = 3.0
+ROLL_BAD = 14.0
 
 FACE_DRIFT_GOOD = 0.004
 FACE_DRIFT_BAD = 0.030
@@ -70,8 +71,8 @@ FACE_DRIFT_BAD = 0.030
 FACE_SIZE_CHANGE_GOOD = 0.003
 FACE_SIZE_CHANGE_BAD = 0.030
 
-SHOULDER_TILT_GOOD = 0.020
-SHOULDER_TILT_BAD = 0.090
+SHOULDER_TILT_GOOD = 0.035
+SHOULDER_TILT_BAD = 0.140
 
 BODY_SWAY_GOOD = 0.005
 BODY_SWAY_BAD = 0.030
@@ -292,10 +293,19 @@ def compute_face_metrics(points, prev_points):
     pitch_proxy = abs(nose["y"] - vertical_face_center_y)
 
     # roll proxy:
-    # 양쪽 눈 높이 차이
-    left_eye_center_y = (left_eye_top["y"] + left_eye_bottom["y"]) / 2.0
-    right_eye_center_y = (right_eye_top["y"] + right_eye_bottom["y"]) / 2.0
-    roll_proxy = abs(left_eye_center_y - right_eye_center_y)
+    # 두 눈 중심을 잇는 선이 수평에서 얼마나 기울었는지(각도, degree)
+    # 단순 y 높이 차이는 얼굴이 멀면 과소평가되므로, 눈 간 거리로 정규화되는 각도를 쓴다.
+    left_eye_center = {
+        "x": (left_eye_left["x"] + left_eye_right["x"]) / 2.0,
+        "y": (left_eye_top["y"] + left_eye_bottom["y"]) / 2.0,
+    }
+    right_eye_center = {
+        "x": (right_eye_left["x"] + right_eye_right["x"]) / 2.0,
+        "y": (right_eye_top["y"] + right_eye_bottom["y"]) / 2.0,
+    }
+    eye_dx = right_eye_center["x"] - left_eye_center["x"]
+    eye_dy = right_eye_center["y"] - left_eye_center["y"]
+    roll_proxy = abs(math.degrees(math.atan2(eye_dy, eye_dx)))
 
     # eye open ratio
     left_eye_height = dist(left_eye_top, left_eye_bottom)
@@ -597,6 +607,7 @@ def category_score(scores, key):
         "gaze": scores["gaze_score"],
         "posture": scores["posture_score"],
         "face": scores["face_stability_score"],
+        "roll": scores["roll_score"],
         "speaking": scores["speaking_score"],
         "hands": scores["hand_score"],
     }[key]
@@ -620,9 +631,10 @@ def category_message(scores, key):
         return "Feedback: Keep your upper body stable."
 
     if key == "face":
-        if scores["roll_score"] < 70:
-            return "Feedback: Keep your head from tilting."
         return "Feedback: Keep your face position stable."
+
+    if key == "roll":
+        return "Feedback: Level your head; it is tilted to one side."
 
     if key == "speaking":
         return "Feedback: Mouth movement is low; check if you are speaking clearly."
@@ -644,7 +656,7 @@ class FeedbackEngine:
     - 현재 경고 중인 항목들 중 가장 약한 항목으로 메시지를 만든다.
     """
 
-    CATEGORY_KEYS = ["gaze", "posture", "face", "speaking", "hands"]
+    CATEGORY_KEYS = ["gaze", "posture", "face", "roll", "speaking", "hands"]
 
     def __init__(self, enter_threshold, exit_threshold):
         self.enter_threshold = enter_threshold

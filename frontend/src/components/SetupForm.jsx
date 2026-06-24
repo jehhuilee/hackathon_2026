@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { createSession } from "../services/api";
+import { useRef, useState } from "react";
+import { createSession, extractResumePdf } from "../services/api";
 
 // Interviewer personas. The persona code drives the real-time audio feedback
 // strictness (alert thresholds) in the backend.
@@ -34,6 +34,27 @@ export default function SetupForm({ onReady }) {
   const [persona, setPersona] = useState("B");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [pdfLoading, setPdfLoading] = useState(false);
+  const [pdfInfo, setPdfInfo] = useState(""); // success/status text for the uploaded PDF
+  const fileInputRef = useRef(null);
+
+  const handlePdfChange = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setPdfLoading(true);
+    setPdfInfo("");
+    setError("");
+    try {
+      const { text, page_count } = await extractResumePdf(file);
+      setResumeText(text);
+      setPdfInfo(`'${file.name}' (${page_count}쪽) 불러옴 · 아래에서 수정할 수 있어요.`);
+    } catch (err) {
+      setError(`PDF 처리에 실패했습니다: ${err.message}`);
+    } finally {
+      setPdfLoading(false);
+      if (fileInputRef.current) fileInputRef.current.value = ""; // allow re-uploading same file
+    }
+  };
 
   const handleSubmit = async (event) => {
     event.preventDefault();
@@ -96,12 +117,24 @@ export default function SetupForm({ onReady }) {
       </label>
 
       <label style={styles.label}>
-        이력서 / 자기소개
+        이력서 / 자기소개 / 포트폴리오
+        <div style={styles.pdfRow}>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="application/pdf,.pdf"
+            onChange={handlePdfChange}
+            disabled={pdfLoading}
+            style={styles.fileInput}
+          />
+          {pdfLoading && <span style={styles.pdfStatus}>PDF에서 텍스트 추출 중...</span>}
+          {!pdfLoading && pdfInfo && <span style={styles.pdfStatusOk}>✓ {pdfInfo}</span>}
+        </div>
         <textarea
           style={{ ...styles.input, height: 140, resize: "vertical" }}
           value={resumeText}
           onChange={(e) => setResumeText(e.target.value)}
-          placeholder="경험, 성과, 프로젝트를 자유롭게 작성하세요."
+          placeholder="PDF를 업로드하거나, 경험·성과·프로젝트를 직접 작성하세요."
         />
       </label>
 
@@ -179,6 +212,10 @@ const styles = {
     fontWeight: 700,
     cursor: "pointer",
   },
+  pdfRow: { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontWeight: 400 },
+  fileInput: { fontSize: 13 },
+  pdfStatus: { fontSize: 13, color: "#52616f" },
+  pdfStatusOk: { fontSize: 13, color: "#15803d" },
   personaGroup: { display: "flex", gap: 10, flexWrap: "wrap" },
   personaCard: {
     flex: 1,

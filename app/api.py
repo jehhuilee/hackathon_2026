@@ -5,6 +5,7 @@ same FastAPI app. They reuse the LLM service for question generation/evaluation
 and the hybrid STT module for transcription, and persist everything via app.db.
 """
 
+import io
 import json
 import uuid
 from pathlib import Path
@@ -22,6 +23,9 @@ router = APIRouter(prefix="/api", tags=["interview"])
 
 AUDIO_DIR = Path(__file__).resolve().parent / "data" / "audio"
 
+# Guardrails for resume PDF upload.
+MAX_RESUME_PDF_BYTES = 10 * 1024 * 1024  # 10 MB
+
 
 def _parse_json_field(raw: str, field_name: str) -> Dict[str, Any]:
     if not raw:
@@ -31,6 +35,42 @@ def _parse_json_field(raw: str, field_name: str) -> Dict[str, Any]:
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=422, detail=f"Invalid JSON in '{field_name}'") from exc
     return value if isinstance(value, dict) else {}
+
+
+@router.post("/resume/extract")
+async def extract_resume(file: UploadFile = File(...)) -> Dict[str, Any]:
+    """Extract plain text from an uploaded resume/portfolio PDF.
+
+    Returns ``{"text": ...}`` so the frontend can prefill the resume field; the
+    user can still edit the text before creating a session.
+    """
+    filename = file.filename or "resume.pdf"
+    content_type = (file.content_type or "").lower()
+    if not (filename.lower().endswith(".pdf") or content_type == "application/pdf"):
+        raise HTTPException(status_code=400, detail="PDF 파일만 업로드할 수 있습니다.")
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="빈 파일입니다.")
+    if len(data) > MAX_RESUME_PDF_BYTES:
+        raise HTTPException(status_code=413, detail="파일이 너무 큽니다. (최대 10MB)")
+
+    try:
+        from pypdf import PdfReader
+
+        reader = PdfReader(io.BytesIO(data))
+        pages = [page.extract_text() or "" for page in reader.pages]
+    except Exception as exc:  # malformed/encrypted PDF
+        raise HTTPException(status_code=422, detail="PDF에서 텍스트를 추출하지 못했습니다.") from exc
+
+    text = "\n".join(pages).strip()
+    if not text:
+        raise HTTPException(
+            status_code=422,
+            detail="텍스트를 찾지 못했습니다. 스캔 이미지 PDF는 직접 입력해 주세요.",
+        )
+
+    return {"text": text, "page_count": len(reader.pages), "filename": filename}
 
 
 @router.post("/sessions", response_model=SessionResponse)

@@ -115,6 +115,7 @@ export default function InterviewSession({ session, onComplete }) {
             <div>얼굴 감지: {recorder.liveMetrics.faceVisible ? "O" : "X"}</div>
             <div>상체 움직임: {recorder.liveMetrics.postureMovement}</div>
             <div>손동작량: {recorder.liveMetrics.handMovement}</div>
+            <div>손 가림: {recorder.liveMetrics.handBlock ? "감지됨 ⚠️" : "없음"}</div>
             <div>어깨 기울기: {recorder.liveMetrics.shoulderTilt}</div>
             {voiceMetrics && (
               <>

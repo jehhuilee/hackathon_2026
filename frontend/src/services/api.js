@@ -17,6 +17,17 @@ async function handle(response) {
   return response.json();
 }
 
+// Upload a resume/portfolio PDF and get its extracted plain text.
+export async function extractResumePdf(file) {
+  const form = new FormData();
+  form.append("file", file, file.name);
+  const response = await fetch(`${BASE_URL}/api/resume/extract`, {
+    method: "POST",
+    body: form,
+  });
+  return handle(response); // { text, page_count, filename }
+}
+
 // Create an interview session and generate questions.
 export async function createSession(profile) {
   const response = await fetch(`${BASE_URL}/api/sessions`, {
