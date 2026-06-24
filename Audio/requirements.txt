@@ -1,0 +1,9 @@
+fastapi>=0.115,<0.116
+uvicorn[standard]>=0.30,<0.31
+pydantic>=2,<3
+setuptools>=68,<81
+numpy>=1.24
+scipy>=1.11
+librosa>=0.10.0
+webrtcvad==2.0.10
+soundfile>=0.12.1

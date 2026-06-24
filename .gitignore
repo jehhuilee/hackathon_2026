@@ -25,3 +25,14 @@ outputs/
 # cache
 .cache/
 .vite/
+
+.env
+
+# backend data (sqlite db + recorded answers)
+app/data/
+
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/

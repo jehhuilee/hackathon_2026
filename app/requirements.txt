@@ -1,0 +1,7 @@
+# Gateway-specific deps. Install alongside Audio/requirements.txt.
+fastapi==0.95.2
+uvicorn[standard]==0.22.0
+python-multipart>=0.0.6
+openai>=1.0.0
+# Local STT (only needed when STT_BACKEND=local):
+faster-whisper>=1.0.0

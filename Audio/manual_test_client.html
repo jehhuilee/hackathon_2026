@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Audio WebSocket Manual Test</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #f6f7f9;
+        color: #1f2933;
+      }
+
+      main {
+        max-width: 920px;
+        margin: 32px auto;
+        padding: 0 20px;
+      }
+
+      h1 {
+        font-size: 24px;
+        margin: 0 0 16px;
+      }
+
+      .toolbar {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        margin-bottom: 16px;
+      }
+
+      button {
+        border: 1px solid #c5ced8;
+        background: white;
+        border-radius: 6px;
+        padding: 8px 12px;
+        font-size: 14px;
+        cursor: pointer;
+      }
+
+      button:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+
+      #state {
+        font-size: 14px;
+        color: #52616f;
+      }
+
+      #alerts {
+        display: grid;
+        gap: 8px;
+        margin-bottom: 16px;
+      }
+
+      .alert {
+        border-left: 4px solid #d64545;
+        background: white;
+        padding: 10px 12px;
+        border-radius: 6px;
+        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+      }
+
+      pre {
+        height: 420px;
+        overflow: auto;
+        background: #101820;
+        color: #d6e2ef;
+        padding: 16px;
+        border-radius: 6px;
+        font-size: 13px;
+        line-height: 1.45;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Audio WebSocket Manual Test</h1>
+      <div class="toolbar">
+        <button id="start">Start mic</button>
+        <button id="stop" disabled>Stop</button>
+        <span id="state">idle</span>
+      </div>
+      <div id="alerts"></div>
+      <pre id="log"></pre>
+    </main>
+
+    <script>
+      const TARGET_SAMPLE_RATE = 16000;
+      const CHUNK_SECONDS = 0.1;
+      const WS_URL = "ws://localhost:8000/ws/audio";
+
+      let ws = null;
+      let audioContext = null;
+      let source = null;
+      let processor = null;
+      let stream = null;
+      let pending = [];
+
+      const startButton = document.querySelector("#start");
+      const stopButton = document.querySelector("#stop");
+      const stateEl = document.querySelector("#state");
+      const logEl = document.querySelector("#log");
+      const alertsEl = document.querySelector("#alerts");
+
+      function log(message) {
+        logEl.textContent += `${new Date().toISOString()} ${message}\n`;
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      function setState(message) {
+        stateEl.textContent = message;
+      }
+
+      function downsampleTo16k(input, inputSampleRate) {
+        if (inputSampleRate === TARGET_SAMPLE_RATE) {
+          return input;
+        }
+
+        const ratio = inputSampleRate / TARGET_SAMPLE_RATE;
+        const outputLength = Math.floor(input.length / ratio);
+        const output = new Float32Array(outputLength);
+
+        for (let i = 0; i < outputLength; i += 1) {
+          const start = Math.floor(i * ratio);
+          const end = Math.min(Math.floor((i + 1) * ratio), input.length);
+          let sum = 0;
+          for (let j = start; j < end; j += 1) {
+            sum += input[j];
+          }
+          output[i] = sum / Math.max(1, end - start);
+        }
+
+        return output;
+      }
+
+      function floatToInt16(samples) {
+        const int16 = new Int16Array(samples.length);
+        for (let i = 0; i < samples.length; i += 1) {
+          const clamped = Math.max(-1, Math.min(1, samples[i]));
+          int16[i] = clamped < 0 ? clamped * 32768 : clamped * 32767;
+        }
+        return int16;
+      }
+
+      function pushAlert(message) {
+        if (!["TOO_FAST", "PITCH_UNSTABLE", "LONG_SILENCE"].includes(message.event)) {
+          return;
+        }
+
+        const item = document.createElement("div");
+        item.className = "alert";
+        item.textContent = `${message.event}: ${JSON.stringify(message)}`;
+        alertsEl.prepend(item);
+
+        while (alertsEl.children.length > 5) {
+          alertsEl.removeChild(alertsEl.lastChild);
+        }
+      }
+
+      async function start() {
+        startButton.disabled = true;
+        setState("requesting microphone");
+
+        ws = new WebSocket(WS_URL);
+        ws.binaryType = "arraybuffer";
+
+        ws.onopen = async () => {
+          log("websocket open");
+          ws.send(JSON.stringify({ event: "config", dtype: "int16", vad_level: 2 }));
+
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              channelCount: 1,
+              echoCancellation: false,
+              noiseSuppression: false,
+              autoGainControl: false,
+            },
+          });
+
+          audioContext = new AudioContext();
+          source = audioContext.createMediaStreamSource(stream);
+
+          processor = audioContext.createScriptProcessor(2048, 1, 1);
+          const chunkSize = Math.floor(TARGET_SAMPLE_RATE * CHUNK_SECONDS);
+
+          processor.onaudioprocess = (event) => {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+              return;
+            }
+
+            const input = event.inputBuffer.getChannelData(0);
+            const downsampled = downsampleTo16k(input, audioContext.sampleRate);
+            pending.push(...downsampled);
+
+            while (pending.length >= chunkSize) {
+              const chunk = pending.slice(0, chunkSize);
+              pending = pending.slice(chunkSize);
+              const int16 = floatToInt16(chunk);
+              ws.send(int16.buffer);
+            }
+          };
+
+          source.connect(processor);
+          processor.connect(audioContext.destination);
+          stopButton.disabled = false;
+          setState(`streaming mic at ${audioContext.sampleRate}Hz -> 16kHz`);
+        };
+
+        ws.onmessage = (event) => {
+          log(event.data);
+          try {
+            pushAlert(JSON.parse(event.data));
+          } catch {
+            // Ignore non-JSON messages.
+          }
+        };
+
+        ws.onerror = () => {
+          log("websocket error");
+          setState("websocket error");
+        };
+
+        ws.onclose = () => {
+          log("websocket closed");
+          setState("stopped");
+          startButton.disabled = false;
+          stopButton.disabled = true;
+        };
+      }
+
+      async function stop() {
+        if (processor) {
+          processor.disconnect();
+          processor = null;
+        }
+        if (source) {
+          source.disconnect();
+          source = null;
+        }
+        if (stream) {
+          stream.getTracks().forEach((track) => track.stop());
+          stream = null;
+        }
+        if (audioContext) {
+          await audioContext.close();
+          audioContext = null;
+        }
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.close();
+        }
+        pending = [];
+      }
+
+      startButton.addEventListener("click", start);
+      stopButton.addEventListener("click", stop);
+    </script>
+  </body>
+</html>
