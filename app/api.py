@@ -5,16 +5,23 @@ same FastAPI app. They reuse the LLM service for question generation/evaluation
 and the hybrid STT module for transcription, and persist everything via app.db.
 """
 
+import base64
 import io
 import json
+import os
 import re
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+import httpx
+from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
+from fastapi.responses import StreamingResponse
 
-from LLM.service import evaluate_answer, generate_overall_feedback, generate_questions
+from LLM.client import complete, complete_stream
+from LLM.service import evaluate_answer, generate_questions
+from LLM.utils.json_parser import parse_json_response
+from LLM.utils.prompt_loader import render_prompt
 
 from app import db
 from app.schemas import SessionCreate, SessionResponse
@@ -87,6 +94,64 @@ def _build_stt_prompt(profile: Optional[Dict[str, Any]]) -> str:
 
     prompt = "면접 답변입니다. 다음 용어가 등장할 수 있습니다: " + ", ".join(terms) + "."
     return prompt[:STT_PROMPT_MAX_CHARS]
+
+
+_TYPECAST_URL = "https://api.typecast.ai/v1/text-to-speech"
+# Korean professional female voice (Seohyeon) — matches the female avatar.
+_TYPECAST_VOICE_ID = os.environ.get("TYPECAST_VOICE_ID", "tc_69f2e455ea79fd197aa0476f")
+
+
+@router.post("/tts")
+async def text_to_speech(payload: Dict[str, Any]):
+    """TTS via Typecast; returns raw WAV bytes.
+
+    The frontend builds viseme timing from Korean jamo decomposition,
+    scaled to the actual audio duration after decoding.
+    """
+    text = (payload.get("text") or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text is required")
+
+    api_key = os.environ.get("TYPECAST_API_KEY", "")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="TYPECAST_API_KEY not configured")
+
+    rate = float(payload.get("rate", 1.0))
+    pitch = float(payload.get("pitch", 1.0))
+
+    if pitch > 1.05 or rate > 1.03:
+        emotion = "toneup"
+    elif pitch < 0.9 or rate < 0.95:
+        emotion = "tonedown"
+    else:
+        emotion = "normal"
+
+    audio_pitch = max(-12, min(12, round((pitch - 1.0) * 8)))
+
+    body = {
+        "text": text,
+        "voice_id": _TYPECAST_VOICE_ID,
+        "model": "ssfm-v30",
+        "language": "kor",
+        "prompt": {"emotion_type": "preset", "emotion_preset": emotion},
+        "output": {
+            "audio_tempo": round(max(0.5, min(2.0, rate)), 2),
+            "audio_pitch": audio_pitch,
+            "audio_format": "wav",
+        },
+    }
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        tc = await client.post(
+            _TYPECAST_URL,
+            headers={"X-API-KEY": api_key, "Content-Type": "application/json"},
+            json=body,
+        )
+
+    if tc.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Typecast error {tc.status_code}")
+
+    return {"audio": base64.b64encode(tc.content).decode()}
 
 
 @router.post("/resume/extract")
@@ -204,6 +269,8 @@ async def submit_answer(
             "job_role": (profile or {}).get("job_role", ""),
             "company": (profile or {}).get("company", ""),
             "tech_stack": (profile or {}).get("tech_stack", []),
+            "difficulty": (profile or {}).get("difficulty", "B"),
+            "custom_persona": (profile or {}).get("custom_persona", {}),
         }
     )
 
@@ -235,29 +302,18 @@ def get_report(session_id: int) -> Dict[str, Any]:
     return report
 
 
-@router.get("/sessions/{session_id}/overall_feedback")
-def overall_feedback(session_id: int) -> Dict[str, Any]:
-    """One comprehensive, session-wide feedback synthesized from all answers.
-
-    Computed on demand (the final report is viewed once), so the LLM cost is not
-    paid on every report read. Returns empty fields when nothing was answered.
-    """
+def _build_overall_feedback_prompt(session_id: int) -> Optional[tuple]:
+    """Return (prompt, answered_count) or None if session not found / nothing answered."""
     report = db.get_report(session_id)
     if not report:
-        raise HTTPException(status_code=404, detail="session not found")
+        return None
 
     answered = [
-        item
-        for item in report["items"]
+        item for item in report["items"]
         if item.get("answer") and item.get("evaluation")
     ]
     if not answered:
-        return {
-            "overall_feedback": "",
-            "improvement_priorities": [],
-            "action_plan": "",
-            "answered_count": 0,
-        }
+        return report, []
 
     blocks: List[str] = []
     for index, item in enumerate(answered):
@@ -272,13 +328,108 @@ def overall_feedback(session_id: int) -> Dict[str, Any]:
         )
 
     session = report["session"]
-    result = generate_overall_feedback(
+    tech_stack = session.get("tech_stack", [])
+    if isinstance(tech_stack, list):
+        tech_stack = ", ".join(str(t) for t in tech_stack)
+
+    prompt = render_prompt(
+        "overall_feedback.md",
         {
             "job_role": session.get("job_role", ""),
             "company": session.get("company", ""),
-            "tech_stack": session.get("tech_stack", []),
+            "tech_stack": tech_stack,
             "qa_block": "\n\n".join(blocks),
-        }
+        },
     )
-    result["answered_count"] = len(answered)
+    return prompt, answered
+
+
+def _normalize_overall_feedback_payload(payload: dict, answered_count: int) -> Dict[str, Any]:
+    priorities = payload.get("improvement_priorities") or []
+    if not isinstance(priorities, list):
+        priorities = [str(priorities)]
+    return {
+        "overall_feedback": str(payload.get("overall_feedback", "")).strip(),
+        "improvement_priorities": [str(p).strip() for p in priorities if str(p).strip()],
+        "action_plan": str(payload.get("action_plan", "")).strip(),
+        "answered_count": answered_count,
+    }
+
+
+@router.get("/sessions/{session_id}/overall_feedback")
+def overall_feedback(session_id: int) -> Dict[str, Any]:
+    """One comprehensive, session-wide feedback synthesized from all answers.
+
+    Result is cached in the DB after first generation so subsequent calls
+    return immediately without hitting the LLM again.
+    """
+    cached = db.get_overall_feedback_cache(session_id)
+    if cached:
+        return cached
+
+    built = _build_overall_feedback_prompt(session_id)
+    if built is None:
+        raise HTTPException(status_code=404, detail="session not found")
+
+    prompt, answered = built
+    if not answered:
+        return {"overall_feedback": "", "improvement_priorities": [], "action_plan": "", "answered_count": 0}
+
+    payload = parse_json_response(complete(prompt))
+    if not isinstance(payload, dict):
+        raise ValueError("Invalid overall feedback response format")
+
+    result = _normalize_overall_feedback_payload(payload, len(answered))
+    db.save_overall_feedback_cache(session_id, result)
     return result
+
+
+@router.get("/sessions/{session_id}/overall_feedback/stream")
+def overall_feedback_stream(session_id: int):
+    """SSE endpoint: streams LLM tokens as they are generated.
+
+    On cache hit the response is a single ``done`` event returned immediately.
+    On cache miss, tokens stream via ``chunk`` events and a final ``done`` event
+    carries the fully structured result (which is also saved to the DB cache).
+    """
+    def _iter():
+        cached = db.get_overall_feedback_cache(session_id)
+        if cached:
+            yield f"data: {json.dumps({'type': 'done', **cached})}\n\n"
+            return
+
+        built = _build_overall_feedback_prompt(session_id)
+        if built is None:
+            yield f"data: {json.dumps({'type': 'error', 'message': 'session not found'})}\n\n"
+            return
+
+        prompt, answered = built
+        if not answered:
+            empty = {"overall_feedback": "", "improvement_priorities": [], "action_plan": "", "answered_count": 0}
+            yield f"data: {json.dumps({'type': 'done', **empty})}\n\n"
+            return
+
+        accumulated = ""
+        try:
+            for token in complete_stream(prompt):
+                accumulated += token
+                yield f"data: {json.dumps({'type': 'chunk', 'text': token})}\n\n"
+        except Exception as exc:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+            return
+
+        try:
+            payload = parse_json_response(accumulated)
+            if not isinstance(payload, dict):
+                raise ValueError("LLM did not return a JSON object")
+            result = _normalize_overall_feedback_payload(payload, len(answered))
+            db.save_overall_feedback_cache(session_id, result)
+            yield f"data: {json.dumps({'type': 'done', **result})}\n\n"
+        except Exception as exc:
+            yield f"data: {json.dumps({'type': 'error', 'message': f'parse error: {exc}'})}\n\n"
+
+    return StreamingResponse(
+        _iter(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

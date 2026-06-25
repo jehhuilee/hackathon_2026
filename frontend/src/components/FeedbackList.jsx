@@ -2,7 +2,7 @@
 //   - 답변을 제출할 때마다 "이번 면접" 항목이 누적(append)된다.
 //   - 각 항목은 클릭 가능하며 onSelect(record)로 상세 보기를 연다.
 
-export default function FeedbackList({ records, collapsed, onToggleCollapse, onSelect }) {
+export default function FeedbackList({ records, pastRecords = [], collapsed, onToggleCollapse, onSelect }) {
   return (
     <aside style={{ ...styles.panel, ...(collapsed ? styles.panelCollapsed : {}) }}>
       <div style={styles.head}>
@@ -37,6 +37,34 @@ export default function FeedbackList({ records, collapsed, onToggleCollapse, onS
               );
             })
           )}
+
+          {pastRecords.length > 0 && (
+            <>
+              <div style={{ ...styles.sectionTitle, marginTop: 6, color: "var(--muted)" }}>
+                지난 면접 기록
+              </div>
+              {pastRecords.map((record) => (
+                <button
+                  type="button"
+                  key={record.id}
+                  onClick={() => onSelect(record)}
+                  style={styles.pastItem}
+                >
+                  <div style={styles.itemTop}>
+                    <span style={styles.pastCompany}>
+                      {record.company} · {record.role}
+                    </span>
+                    {record.evaluation?.total_score != null && (
+                      <span style={styles.pastScore}>{record.evaluation.total_score}점</span>
+                    )}
+                  </div>
+                  <div style={styles.itemCategory}>
+                    {record.date} · {record.category}
+                  </div>
+                </button>
+              ))}
+            </>
+          )}
         </div>
       )}
     </aside>
@@ -45,48 +73,41 @@ export default function FeedbackList({ records, collapsed, onToggleCollapse, onS
 
 const styles = {
   panel: {
-    width: 320,
-    flexShrink: 0,
-    alignSelf: "flex-start",
-    position: "sticky",
-    top: 16,
-    maxHeight: "calc(100vh - 32px)",
+    flex: 1,
     display: "flex",
     flexDirection: "column",
-    background: "var(--surface)",
-    borderRadius: "var(--radius)",
-    border: "1px solid var(--border)",
-    boxShadow: "var(--shadow)",
     overflow: "hidden",
+    height: "100%",
   },
-  panelCollapsed: { width: 56, alignItems: "center" },
+  panelCollapsed: { alignItems: "center" },
   head: {
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
-    padding: "14px 16px",
+    padding: "15px 18px",
     borderBottom: "1px solid var(--border)",
+    background: "var(--surface)",
   },
   title: { fontWeight: 800, fontSize: 15, color: "var(--text)" },
   toggle: {
     border: "1px solid var(--border-strong)",
     background: "var(--surface)",
     borderRadius: 8,
-    padding: "4px 9px",
+    padding: "4px 10px",
     cursor: "pointer",
     fontSize: 13,
     color: "var(--muted)",
   },
-  scroll: { overflowY: "auto", padding: 14, display: "flex", flexDirection: "column", gap: 10 },
-  sectionTitle: { fontSize: 12, color: "var(--primary-ink)", fontWeight: 800, letterSpacing: 0.2 },
-  empty: { margin: 0, fontSize: 13, color: "var(--faint)" },
+  scroll: { overflowY: "auto", padding: "14px 14px 20px", display: "flex", flexDirection: "column", gap: 8 },
+  sectionTitle: { fontSize: 11, color: "var(--primary-ink)", fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", padding: "4px 2px" },
+  empty: { margin: 0, fontSize: 13, color: "var(--faint)", padding: "4px 2px" },
   item: {
     textAlign: "left",
     width: "100%",
     border: "1px solid var(--border)",
     background: "var(--surface-2)",
     borderRadius: 12,
-    padding: "12px 14px",
+    padding: "13px 15px",
     cursor: "pointer",
     display: "flex",
     flexDirection: "column",
@@ -98,15 +119,15 @@ const styles = {
     fontWeight: 800,
     color: "var(--success)",
     background: "var(--success-soft)",
-    padding: "2px 9px",
+    padding: "3px 10px",
     borderRadius: 999,
   },
-  score: { fontSize: 17, fontWeight: 800, color: "var(--primary)" },
+  score: { fontSize: 18, fontWeight: 800, color: "var(--primary)" },
   itemQuestion: {
     fontSize: 13,
     fontWeight: 700,
     color: "var(--text)",
-    lineHeight: 1.45,
+    lineHeight: 1.5,
     overflow: "hidden",
     textOverflow: "ellipsis",
     display: "-webkit-box",
@@ -114,4 +135,18 @@ const styles = {
     WebkitBoxOrient: "vertical",
   },
   itemCategory: { fontSize: 12, color: "var(--muted)" },
+  pastItem: {
+    textAlign: "left",
+    width: "100%",
+    border: "1px solid var(--border)",
+    background: "var(--surface)",
+    borderRadius: 12,
+    padding: "13px 15px",
+    cursor: "pointer",
+    display: "flex",
+    flexDirection: "column",
+    gap: 6,
+  },
+  pastCompany: { fontSize: 13, fontWeight: 700, color: "var(--text)" },
+  pastScore: { fontSize: 16, fontWeight: 800, color: "var(--muted)" },
 };

@@ -69,6 +69,21 @@ FEEDBACK_PROFILES: dict[str, FeedbackThresholds] = {
 DEFAULT_PERSONA = "B"
 
 
-def get_thresholds(persona: str | None) -> FeedbackThresholds:
-    """Resolve a persona code to its thresholds, falling back to the default."""
+def get_thresholds(persona: str | None, custom_strictness: int | None = None) -> FeedbackThresholds:
+    """Resolve a persona code to its thresholds, falling back to the default.
+
+    For persona "D" (custom), interpolates linearly between A (strictness=1)
+    and C (strictness=5) based on the user-configured strictness level.
+    """
+    if (persona or "").upper() == "D":
+        s = min(5, max(1, int(custom_strictness or 3)))
+        t = (s - 1) / 4.0  # 0.0 = A-level lenient, 1.0 = C-level strict
+        a = FEEDBACK_PROFILES["A"]
+        c = FEEDBACK_PROFILES["C"]
+        return FeedbackThresholds(
+            syllables_per_second_too_fast=a.syllables_per_second_too_fast + t * (c.syllables_per_second_too_fast - a.syllables_per_second_too_fast),
+            pitch_std_unstable_hz=a.pitch_std_unstable_hz + t * (c.pitch_std_unstable_hz - a.pitch_std_unstable_hz),
+            pitch_jitter_unstable_hz=a.pitch_jitter_unstable_hz + t * (c.pitch_jitter_unstable_hz - a.pitch_jitter_unstable_hz),
+            long_silence_seconds=a.long_silence_seconds + t * (c.long_silence_seconds - a.long_silence_seconds),
+        )
     return FEEDBACK_PROFILES.get(persona or DEFAULT_PERSONA, FEEDBACK_PROFILES[DEFAULT_PERSONA])

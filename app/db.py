@@ -26,13 +26,15 @@ def init_db() -> None:
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS sessions (
-                id             INTEGER PRIMARY KEY AUTOINCREMENT,
-                job_role       TEXT    NOT NULL DEFAULT '',
-                company        TEXT    NOT NULL DEFAULT '',
-                tech_stack     TEXT    NOT NULL DEFAULT '[]',
-                resume_text    TEXT    NOT NULL DEFAULT '',
-                question_count INTEGER NOT NULL DEFAULT 0,
-                created_at     TEXT    NOT NULL DEFAULT (datetime('now'))
+                id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_role              TEXT    NOT NULL DEFAULT '',
+                company               TEXT    NOT NULL DEFAULT '',
+                tech_stack            TEXT    NOT NULL DEFAULT '[]',
+                resume_text           TEXT    NOT NULL DEFAULT '',
+                question_count        INTEGER NOT NULL DEFAULT 0,
+                difficulty            TEXT    NOT NULL DEFAULT 'B',
+                custom_persona_config TEXT    NOT NULL DEFAULT '{}',
+                created_at            TEXT    NOT NULL DEFAULT (datetime('now'))
             );
 
             CREATE TABLE IF NOT EXISTS questions (
@@ -67,14 +69,25 @@ def init_db() -> None:
             );
             """
         )
+        # Migration: add columns introduced after initial schema (idempotent).
+        for migration in [
+            "ALTER TABLE sessions ADD COLUMN difficulty TEXT NOT NULL DEFAULT 'B'",
+            "ALTER TABLE sessions ADD COLUMN custom_persona_config TEXT NOT NULL DEFAULT '{}'",
+            "ALTER TABLE sessions ADD COLUMN overall_feedback_json TEXT",
+        ]:
+            try:
+                conn.execute(migration)
+            except sqlite3.OperationalError:
+                pass  # column already exists
 
 
 def create_session(data: Dict[str, Any]) -> int:
     with _connect() as conn:
         cursor = conn.execute(
             """
-            INSERT INTO sessions (job_role, company, tech_stack, resume_text, question_count)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO sessions (job_role, company, tech_stack, resume_text, question_count,
+                                  difficulty, custom_persona_config)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 data.get("job_role", ""),
@@ -82,6 +95,8 @@ def create_session(data: Dict[str, Any]) -> int:
                 json.dumps(data.get("tech_stack", []), ensure_ascii=False),
                 data.get("resume_text", ""),
                 int(data.get("question_count", 0)),
+                data.get("difficulty", "B"),
+                json.dumps(data.get("custom_persona") or {}, ensure_ascii=False),
             ),
         )
         return int(cursor.lastrowid)
@@ -135,6 +150,7 @@ def get_session(session_id: int) -> Optional[Dict[str, Any]]:
             return None
         data = dict(row)
         data["tech_stack"] = json.loads(data.get("tech_stack") or "[]")
+        data["custom_persona"] = json.loads(data.get("custom_persona_config") or "{}")
         return data
 
 
@@ -183,6 +199,30 @@ def create_evaluation(answer_id: int, evaluation: Dict[str, Any]) -> int:
             ),
         )
         return int(cursor.lastrowid)
+
+
+def get_overall_feedback_cache(session_id: int) -> Optional[Dict[str, Any]]:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT overall_feedback_json FROM sessions WHERE id = ?", (session_id,)
+        ).fetchone()
+        if not row:
+            return None
+        raw = row["overall_feedback_json"]
+        if not raw:
+            return None
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return None
+
+
+def save_overall_feedback_cache(session_id: int, data: Dict[str, Any]) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE sessions SET overall_feedback_json = ? WHERE id = ?",
+            (json.dumps(data, ensure_ascii=False), session_id),
+        )
 
 
 def get_report(session_id: int) -> Optional[Dict[str, Any]]:

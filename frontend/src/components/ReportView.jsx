@@ -1,28 +1,48 @@
-import { useEffect, useState } from "react";
-import { getReport, getOverallFeedback } from "../services/api";
+import { useEffect, useRef, useState } from "react";
+import { getReport, streamOverallFeedback } from "../services/api";
 import ScoreDonut from "./ScoreDonut";
 
-// Final report. Per the product decision, individual per-question answers and
-// feedback live in the in-session 종합 피드백 view; here we show ONE comprehensive,
-// session-wide feedback instead — plus a compact score overview for context.
+// Extract the overall_feedback text progressively from a partial JSON stream.
+// Works because overall_feedback is always the first key in the JSON object.
+function extractStreamingText(raw) {
+  const markerIdx = raw.indexOf('"overall_feedback"');
+  if (markerIdx === -1) return null;
+  const afterMarker = raw.slice(markerIdx + '"overall_feedback"'.length);
+  const colonQuote = afterMarker.match(/^\s*:\s*"/);
+  if (!colonQuote) return null;
+  const content = afterMarker.slice(colonQuote[0].length);
+  return content.replace(/\\n/g, "\n").replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+}
+
 export default function ReportView({ sessionId, onRestart }) {
   const [report, setReport] = useState(null);
   const [overall, setOverall] = useState(null);
+  const [streamRaw, setStreamRaw] = useState(""); // accumulated raw LLM tokens
   const [error, setError] = useState("");
   const [overallError, setOverallError] = useState("");
+  const esRef = useRef(null);
 
   useEffect(() => {
     let alive = true;
-    // Scores load fast (DB read); the synthesized overall feedback is a slower
-    // LLM call, so it has its own loading/error state and never blocks the scores.
+
     getReport(sessionId)
       .then((data) => alive && setReport(data))
       .catch((err) => alive && setError(`리포트를 불러오지 못했습니다: ${err.message}`));
-    getOverallFeedback(sessionId)
-      .then((data) => alive && setOverall(data))
-      .catch((err) => alive && setOverallError(`종합 피드백 생성 실패: ${err.message}`));
+
+    esRef.current = streamOverallFeedback(sessionId, {
+      onChunk: (text) => alive && setStreamRaw((prev) => prev + text),
+      onDone: (data) => {
+        if (alive) {
+          setOverall(data);
+          setStreamRaw(""); // structured data is now available; clear raw buffer
+        }
+      },
+      onError: (err) => alive && setOverallError(`종합 피드백 생성 실패: ${err.message}`),
+    });
+
     return () => {
       alive = false;
+      esRef.current?.close();
     };
   }, [sessionId]);
 
@@ -30,6 +50,11 @@ export default function ReportView({ sessionId, onRestart }) {
   if (!report) return <p style={styles.loading}>리포트를 불러오는 중...</p>;
 
   const answeredItems = (report.items || []).filter((it) => it.evaluation);
+
+  // Progressive text shown while streaming; switches to structured data on done.
+  const streamingText = streamRaw ? extractStreamingText(streamRaw) : null;
+  const feedbackText = overall?.overall_feedback ?? streamingText;
+  const isStreaming = !overall && !overallError;
 
   return (
     <div style={styles.container}>
@@ -47,7 +72,6 @@ export default function ReportView({ sessionId, onRestart }) {
         </div>
       </div>
 
-      {/* 질문별 점수 한눈에 (개별 피드백 대신 점수 개요만) */}
       {answeredItems.length > 0 && (
         <div style={styles.scoreOverview}>
           {answeredItems.map((item, i) => (
@@ -59,19 +83,21 @@ export default function ReportView({ sessionId, onRestart }) {
         </div>
       )}
 
-      {/* 전체를 관통하는 종합 피드백 하나 */}
       <h2 style={styles.sectionHeading}>종합 피드백</h2>
       {overallError && <p style={styles.error}>{overallError}</p>}
-      {!overall && !overallError && <p style={styles.loading}>종합 피드백을 생성하는 중입니다...</p>}
-      {overall && (
+
+      {!overallError && (
         <div className="card" style={styles.overallCard}>
-          {overall.overall_feedback ? (
-            <p style={styles.overallText}>{overall.overall_feedback}</p>
+          {feedbackText ? (
+            <p style={styles.overallText}>
+              {feedbackText}
+              {isStreaming && <span style={styles.cursor}>▌</span>}
+            </p>
           ) : (
-            <p style={styles.skipped}>답변이 충분하지 않아 종합 피드백을 생성하지 못했습니다.</p>
+            <p style={styles.loading}>종합 피드백을 생성하는 중입니다...</p>
           )}
 
-          {overall.improvement_priorities?.length > 0 && (
+          {overall?.improvement_priorities?.length > 0 && (
             <div style={styles.subBlock}>
               <h3 style={styles.subHeading}>🎯 개선 우선순위</h3>
               <ol style={styles.priorityList}>
@@ -84,7 +110,7 @@ export default function ReportView({ sessionId, onRestart }) {
             </div>
           )}
 
-          {overall.action_plan && (
+          {overall?.action_plan && (
             <div style={styles.subBlock}>
               <h3 style={styles.subHeading}>🚀 다음 면접까지의 실행 계획</h3>
               <p style={styles.actionText}>{overall.action_plan}</p>
@@ -124,6 +150,7 @@ const styles = {
   sectionHeading: { margin: "0 0 12px", fontSize: 20, fontWeight: 800 },
   overallCard: { padding: 26, marginBottom: 24, display: "flex", flexDirection: "column", gap: 18 },
   overallText: { margin: 0, fontSize: 15, lineHeight: 1.85, color: "var(--text)", whiteSpace: "pre-wrap" },
+  cursor: { display: "inline-block", animation: "blink 1s step-end infinite", marginLeft: 2 },
   subBlock: { borderTop: "1px solid var(--border)", paddingTop: 16 },
   subHeading: { margin: "0 0 10px", fontSize: 15, fontWeight: 800, color: "var(--primary-ink)" },
   priorityList: { margin: 0, paddingLeft: 20, display: "grid", gap: 8 },

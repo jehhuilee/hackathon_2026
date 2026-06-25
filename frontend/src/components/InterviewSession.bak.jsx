@@ -174,23 +174,15 @@ export default function InterviewSession({ session, onComplete }) {
       beginAnswerRef.current();
     };
     const voice = resolvePersonaVoice(session);
-    // Safety timer only covers TTS that never produces sound (muted / unsupported
-    // → onStart never fires). Once playback actually starts we re-arm it to a long
-    // backstop so a multi-sentence question is never cut off mid-speech — onEnd,
-    // fired at the audio's natural end, is what normally advances the flow.
-    let fallback = setTimeout(start, 9000);
     speaker.speak(current.question, {
       ...voice,
-      onStart: () => {
-        setAvatarSpeaking(true);
-        clearTimeout(fallback);
-        fallback = setTimeout(start, 120000);
-      },
+      onStart: () => setAvatarSpeaking(true),
       onEnd: () => {
         setAvatarSpeaking(false);
         start();
       },
     });
+    const fallback = setTimeout(start, 9000);
     return () => {
       cancelled = true;
       clearTimeout(fallback);
@@ -317,93 +309,95 @@ export default function InterviewSession({ session, onComplete }) {
   const progress = Math.round(((index + 1) / questions.length) * 100);
 
   return (
-    <div style={styles.shell}>
-      {/* ── 왼쪽: 면접 콘텐츠 (스크롤 가능) ── */}
-      <div style={styles.mainPane}>
-        <header style={styles.header}>
-          <div style={styles.headerLeft}>
-            <span style={styles.counter}>
-              질문 {index + 1} / {questions.length}
-            </span>
-            <div style={styles.progressTrack}>
-              <div style={{ ...styles.progressFill, width: `${progress}%` }} />
-            </div>
-          </div>
-          <div style={styles.headerRight}>
-            <span style={styles.categoryPill}>{current.category}</span>
-            {allAnswered && (
-              <button type="button" onClick={() => setView("summary")} className="btn btn-primary" style={styles.summaryBtn}>
-                종합 피드백 보기
-              </button>
-            )}
-          </div>
-        </header>
-
-        {/* 면접관(왼쪽) + 사용자 영상(오른쪽) */}
-        <div style={styles.stage}>
-          <div style={styles.avatarSide}>
-            <span style={styles.tileLabel}>AI 면접관</span>
-            {!avatarFailed && (
-              <InterviewerAvatar
-                url={AVATAR_URL}
-                mouthRef={mouthRef}
-                expressionRef={expressionRef}
-                onFail={() => setAvatarFailed(true)}
-              />
-            )}
-            {avatarFailed && <div style={styles.avatarFallback}>면접관</div>}
-            {avatarSpeaking && <span style={styles.speakingBadge}>● 말하는 중</span>}
-            {!avatarSpeaking && recorder.isRecording && MOOD_BADGE[avatarMood] && (
-              <span style={{ ...styles.moodBadge, background: MOOD_BADGE[avatarMood].color }}>
-                {MOOD_BADGE[avatarMood].emoji} {MOOD_BADGE[avatarMood].label}
-              </span>
-            )}
-            <div style={styles.questionOverlay}>
-              <p style={styles.questionText}>{current.question}</p>
-              <button
-                type="button"
-                onClick={() => speakQuestion(current.question)}
-                disabled={avatarSpeaking || recorder.isRecording}
-                style={styles.replayBtn}
-              >
-                🔊 질문 다시 듣기
-              </button>
-            </div>
-          </div>
-
-          <div style={styles.videoSide}>
-            {recorder.isRecording && <span style={styles.recDot}>● REC</span>}
-            <video ref={recorder.videoRef} autoPlay muted playsInline style={styles.video} />
-            <LiveFeedbackToasts toasts={toasts} />
+    <div style={styles.container}>
+      {/* 진행 헤더 + 진행 막대 */}
+      <header style={styles.header}>
+        <div style={styles.headerLeft}>
+          <span style={styles.counter}>
+            질문 {index + 1} / {questions.length}
+          </span>
+          <div style={styles.progressTrack}>
+            <div style={{ ...styles.progressFill, width: `${progress}%` }} />
           </div>
         </div>
-
-        {error && <p style={styles.error}>{error}</p>}
-
-        {lastResult ? (
-          <ResultPanel result={lastResult} onNext={handleNext} isLast={isLastQuestion} />
-        ) : (
-          <div style={styles.controls}>
-            <button type="button" onClick={endInterview} className="btn btn-ghost" style={styles.endBtn}>
-              면접 종료
+        <div style={styles.headerRight}>
+          <span style={styles.categoryPill}>{current.category}</span>
+          {allAnswered && (
+            <button type="button" onClick={() => setView("summary")} className="btn btn-primary" style={styles.summaryBtn}>
+              종합 피드백 보기
             </button>
-            {recorder.isRecording ? (
-              <button onClick={endAnswer} disabled={submitting} style={styles.stopBtn}>
-                {submitting ? "분석 중..." : "■ 답변 종료"}
-              </button>
-            ) : submitting ? (
-              <button disabled style={styles.stopBtn}>
-                분석 중...
-              </button>
-            ) : (
-              <span style={styles.waiting}>다음 질문을 준비 중입니다...</span>
-            )}
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      </header>
 
-      {/* ── 오른쪽: 피드백 사이드 패널 (화면 끝까지 고정) ── */}
-      <div style={{ ...styles.sidePane, width: listCollapsed ? 56 : 340 }}>
+      <div style={styles.bodyRow}>
+        <div style={styles.mainCol}>
+          {/* 면접관(왼쪽) + 사용자 영상(오른쪽) — 하나의 다크 스테이지 */}
+          <div style={styles.stage}>
+            <div style={styles.avatarSide}>
+              <span style={styles.tileLabel}>AI 면접관</span>
+              {!avatarFailed && (
+                <InterviewerAvatar
+                  url={AVATAR_URL}
+                  mouthRef={mouthRef}
+                  expressionRef={expressionRef}
+                  onFail={() => setAvatarFailed(true)}
+                />
+              )}
+              {avatarFailed && <div style={styles.avatarFallback}>면접관</div>}
+              {avatarSpeaking && <span style={styles.speakingBadge}>● 말하는 중</span>}
+              {!avatarSpeaking && recorder.isRecording && MOOD_BADGE[avatarMood] && (
+                <span style={{ ...styles.moodBadge, background: MOOD_BADGE[avatarMood].color }}>
+                  {MOOD_BADGE[avatarMood].emoji} {MOOD_BADGE[avatarMood].label}
+                </span>
+              )}
+              {/* 질문 오버레이 */}
+              <div style={styles.questionOverlay}>
+                <p style={styles.questionText}>{current.question}</p>
+                <button
+                  type="button"
+                  onClick={() => speakQuestion(current.question)}
+                  disabled={avatarSpeaking || recorder.isRecording}
+                  style={styles.replayBtn}
+                >
+                  🔊 질문 다시 듣기
+                </button>
+              </div>
+            </div>
+
+            <div style={styles.videoSide}>
+              {recorder.isRecording && <span style={styles.recDot}>● REC</span>}
+              <video ref={recorder.videoRef} autoPlay muted playsInline style={styles.video} />
+              {/* 실시간 코칭 토스트 (영상 위, 우하단) */}
+              <LiveFeedbackToasts toasts={toasts} />
+            </div>
+          </div>
+
+          {error && <p style={styles.error}>{error}</p>}
+
+          {lastResult ? (
+            <ResultPanel result={lastResult} onNext={handleNext} isLast={isLastQuestion} />
+          ) : (
+            <div style={styles.controls}>
+              <button type="button" onClick={endInterview} className="btn btn-ghost" style={styles.endBtn}>
+                면접 종료
+              </button>
+              {recorder.isRecording ? (
+                <button onClick={endAnswer} disabled={submitting} style={styles.stopBtn}>
+                  {submitting ? "분석 중..." : "■ 답변 종료"}
+                </button>
+              ) : submitting ? (
+                <button disabled style={styles.stopBtn}>
+                  분석 중...
+                </button>
+              ) : (
+                <span style={styles.waiting}>다음 질문을 준비 중입니다...</span>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* 사이드바형 피드백 목록 (이번 면접 + 지난 면접 기록) */}
         <FeedbackList
           records={records}
           pastRecords={PAST_INTERVIEWS}
@@ -463,74 +457,48 @@ function ResultPanel({ result, onNext, isLast }) {
 }
 
 const styles = {
-  // ── 분할 레이아웃 ─────────────────────────────────────────────
-  shell: {
-    display: "flex",
-    height: "100vh",
-    overflow: "hidden",
-    background: "var(--bg)",
-  },
-  mainPane: {
-    flex: 1,
-    minWidth: 0,
-    overflowY: "auto",
-    padding: "16px 28px 40px",
-    display: "flex",
-    flexDirection: "column",
-    gap: 14,
-  },
-  sidePane: {
-    flexShrink: 0,
-    borderLeft: "1px solid var(--border)",
-    background: "var(--surface)",
-    display: "flex",
-    flexDirection: "column",
-    transition: "width 0.2s ease",
-    overflow: "hidden",
-  },
-
-  // ── 상단 헤더 ──────────────────────────────────────────────────
+  container: { maxWidth: 1320, margin: "0 auto", padding: "20px 24px 40px" },
   header: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 20 },
-  headerLeft: { display: "flex", alignItems: "center", gap: 16, flex: 1, minWidth: 0 },
-  counter: { fontWeight: 800, color: "var(--text)", fontSize: 16, whiteSpace: "nowrap" },
+  headerLeft: { display: "flex", alignItems: "center", gap: 14, flex: 1, minWidth: 0 },
+  counter: { fontWeight: 800, color: "var(--text)", fontSize: 15, whiteSpace: "nowrap" },
   progressTrack: {
     flex: 1,
-    maxWidth: 480,
-    height: 7,
+    maxWidth: 420,
+    height: 6,
     background: "var(--border)",
     borderRadius: 999,
     overflow: "hidden",
   },
-  progressFill: { height: "100%", background: "var(--primary)", borderRadius: 999, transition: "width 0.4s ease" },
+  progressFill: { height: "100%", background: "var(--primary)", borderRadius: 999, transition: "width 0.3s ease" },
   headerRight: { display: "flex", alignItems: "center", gap: 12, flexShrink: 0 },
   categoryPill: {
     background: "var(--surface)",
     border: "1px solid var(--border-strong)",
     color: "var(--muted)",
-    padding: "7px 16px",
+    padding: "6px 14px",
     borderRadius: 999,
     fontSize: 13,
     fontWeight: 700,
   },
-  summaryBtn: { padding: "9px 18px", fontSize: 14 },
-
-  // ── 다크 스테이지 (면접관 + 영상) ────────────────────────────
+  summaryBtn: { padding: "9px 16px", fontSize: 14 },
+  bodyRow: { display: "flex", gap: 20, alignItems: "flex-start", marginTop: 16, flexWrap: "wrap" },
+  mainCol: { flex: 1, minWidth: 360, display: "flex", flexDirection: "column", gap: 16 },
+  // 하나의 다크 스테이지에 면접관(왼쪽) + 영상(오른쪽)
   stage: {
     display: "flex",
-    height: 520,
-    borderRadius: 20,
+    height: 460,
+    borderRadius: 18,
     overflow: "hidden",
     background: "#0b1020",
-    boxShadow: "0 8px 40px rgba(0,0,0,0.28)",
   },
   avatarSide: {
     position: "relative",
     width: "44%",
-    flexShrink: 0,
-    background: "radial-gradient(ellipse at 50% 25%, #1e2d45, #0b1020)",
-    borderRight: "1px solid rgba(255,255,255,0.07)",
+    minWidth: 240,
+    background: "radial-gradient(circle at 50% 30%, #243042, #0b1020)",
+    borderRight: "1px solid rgba(255,255,255,0.06)",
   },
-  videoSide: { position: "relative", flex: 1, minWidth: 0, background: "#050810" },
+  videoSide: { position: "relative", flex: 1, minWidth: 0, background: "#000" },
   avatarFallback: {
     position: "absolute",
     inset: 0,
@@ -541,126 +509,114 @@ const styles = {
     fontWeight: 700,
     fontSize: 18,
   },
-
-  // 배지들 (공통 absolute)
   tileLabel: {
     position: "absolute",
-    top: 14,
-    left: 14,
+    top: 12,
+    left: 12,
     zIndex: 6,
-    color: "#cbd5e1",
-    background: "rgba(11,16,32,0.75)",
-    padding: "4px 13px",
+    color: "#e2e8f0",
+    background: "rgba(11,16,32,0.72)",
+    padding: "4px 12px",
     borderRadius: 999,
     fontSize: 12,
     fontWeight: 700,
-    letterSpacing: "0.02em",
   },
   speakingBadge: {
     position: "absolute",
-    top: 14,
-    right: 14,
+    top: 12,
+    right: 12,
     color: "#fff",
     background: "rgba(108,92,231,0.92)",
-    padding: "5px 12px",
+    padding: "4px 11px",
     borderRadius: 999,
     fontSize: 12,
     fontWeight: 700,
   },
   moodBadge: {
     position: "absolute",
-    top: 14,
-    right: 14,
+    top: 12,
+    right: 12,
     color: "#fff",
-    padding: "5px 12px",
+    padding: "4px 11px",
     borderRadius: 999,
     fontSize: 12,
     fontWeight: 700,
   },
-
-  // ── 질문 오버레이 (아바타 패널 하단) ──────────────────────────
   questionOverlay: {
     position: "absolute",
     left: 0,
     right: 0,
     bottom: 0,
-    padding: "20px 20px 18px",
-    background: "linear-gradient(to top, rgba(5,8,20,0.97) 0%, rgba(5,8,20,0.7) 60%, transparent 100%)",
+    padding: 16,
+    background: "linear-gradient(to top, rgba(11,16,32,0.92), rgba(11,16,32,0))",
     display: "flex",
     flexDirection: "column",
-    gap: 12,
+    gap: 10,
     alignItems: "flex-start",
     zIndex: 5,
   },
-  questionText: { margin: 0, color: "#f1f5f9", fontSize: 17, fontWeight: 700, lineHeight: 1.5 },
+  questionText: { margin: 0, color: "#fff", fontSize: 16, fontWeight: 700, lineHeight: 1.45 },
   replayBtn: {
-    padding: "8px 16px",
+    padding: "8px 14px",
     borderRadius: 999,
-    border: "1px solid rgba(255,255,255,0.2)",
-    background: "rgba(255,255,255,0.08)",
-    color: "#cbd5e1",
+    border: "1px solid rgba(255,255,255,0.18)",
+    background: "rgba(255,255,255,0.1)",
+    color: "#e2e8f0",
     cursor: "pointer",
     fontSize: 13,
     fontWeight: 600,
-    backdropFilter: "blur(4px)",
+    flexShrink: 0,
   },
-
-  // ── 영상 패널 ─────────────────────────────────────────────────
   video: { width: "100%", height: "100%", objectFit: "cover", display: "block" },
   recDot: {
     position: "absolute",
-    top: 14,
-    left: 14,
+    top: 12,
+    left: 12,
     color: "#fff",
     background: "rgba(220,38,38,0.92)",
-    padding: "5px 12px",
+    padding: "4px 10px",
     borderRadius: 999,
     fontWeight: 700,
     fontSize: 12,
     zIndex: 6,
   },
-
-  // ── 답변 컨트롤 바 ────────────────────────────────────────────
-  controls: { display: "flex", gap: 12, alignItems: "center", justifyContent: "space-between", padding: "4px 0" },
-  waiting: { color: "var(--muted)", fontWeight: 600, fontSize: 15 },
+  controls: { marginTop: 4, display: "flex", gap: 12, alignItems: "center", justifyContent: "space-between" },
+  waiting: { color: "var(--muted)", fontWeight: 600 },
   stopBtn: {
-    padding: "14px 32px",
-    borderRadius: 12,
+    padding: "13px 26px",
+    borderRadius: 10,
     border: "none",
     background: "var(--danger)",
     color: "white",
     fontSize: 16,
     fontWeight: 700,
     cursor: "pointer",
-    letterSpacing: "-0.01em",
   },
-  endBtn: { padding: "14px 22px", fontSize: 15 },
+  endBtn: { padding: "13px 20px", fontSize: 15 },
   error: { color: "var(--danger)", fontWeight: 600 },
-
-  // ── 결과 패널 (답변 종료 후) ──────────────────────────────────
-  resultPanel: { padding: "22px 24px", display: "flex", flexDirection: "column", gap: 18 },
+  resultPanel: { padding: 20, display: "flex", flexDirection: "column", gap: 16 },
   transcriptBlock: {
     background: "var(--surface-2)",
     border: "1px solid var(--border)",
-    borderRadius: 14,
-    padding: "14px 18px",
+    borderRadius: 12,
+    padding: "12px 16px",
   },
-  transcriptLabel: { fontSize: 12, fontWeight: 800, color: "var(--muted)", letterSpacing: "0.04em", textTransform: "uppercase" },
-  transcriptText: { margin: "8px 0 0", fontSize: 15, lineHeight: 1.75, color: "#3b3f4a", whiteSpace: "pre-wrap" },
-  resultBottom: { display: "flex", gap: 28, alignItems: "center", flexWrap: "nowrap" },
-  resultDonuts: { display: "flex", gap: 22, flexShrink: 0 },
-  resultAssess: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 10 },
-  assessLine: { display: "flex", alignItems: "flex-start", gap: 10, minWidth: 0 },
-  assessHead: { fontSize: 13, fontWeight: 800, color: "var(--muted)", minWidth: 42, flexShrink: 0, paddingTop: 5 },
+  transcriptLabel: { fontSize: 13, fontWeight: 800, color: "var(--muted)" },
+  transcriptText: { margin: "6px 0 0", fontSize: 14, lineHeight: 1.7, color: "#3b3f4a", whiteSpace: "pre-wrap" },
+  resultBottom: { display: "flex", gap: 24, alignItems: "center", flexWrap: "wrap" },
+  resultDonuts: { display: "flex", gap: 20, flexShrink: 0 },
+  resultAssess: { flex: 1, minWidth: 220, maxWidth: 460, display: "flex", flexDirection: "column", gap: 8 },
+  assessLine: { display: "flex", alignItems: "flex-start", gap: 8, minWidth: 0 },
+  assessHead: { fontSize: 13, fontWeight: 800, color: "var(--muted)", minWidth: 40, flexShrink: 0, paddingTop: 5 },
   assessChip: {
     flex: "1 1 0",
     minWidth: 0,
-    whiteSpace: "normal",
+    whiteSpace: "normal", // 말줄임 없이 줄바꿈으로 전체 표시
     wordBreak: "keep-all",
     overflowWrap: "anywhere",
-    lineHeight: 1.5,
-    borderRadius: 10,
+    lineHeight: 1.45,
+    borderRadius: 12,
     textAlign: "left",
   },
-  nextBtn: { padding: "14px 26px", fontSize: 15, fontWeight: 700, flexShrink: 0 },
+  nextBtn: { padding: "13px 22px", fontSize: 15, flexShrink: 0 },
 };

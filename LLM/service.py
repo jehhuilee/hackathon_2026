@@ -15,7 +15,7 @@ def generate_questions(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     prompt = render_prompt(
         "question_generation.md",
         {
-            "difficulty_instruction": question_instruction(data.get("difficulty")),
+            "difficulty_instruction": question_instruction(data.get("difficulty"), data.get("custom_persona")),
             "job_role": data.get("job_role", ""),
             "company": data.get("company", ""),
             "tech_stack": ", ".join(data.get("tech_stack", [])),
@@ -48,7 +48,7 @@ def evaluate_answer(data: Dict[str, Any]) -> Dict[str, Any]:
     prompt = render_prompt(
         "answer_evaluation.md",
         {
-            "difficulty_instruction": eval_instruction(data.get("difficulty")),
+            "difficulty_instruction": eval_instruction(data.get("difficulty"), data.get("custom_persona")),
             "job_role": data.get("job_role", ""),
             "company": data.get("company", ""),
             "tech_stack": tech_stack,
@@ -105,7 +105,7 @@ def generate_followups(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     난이도에 꼬리 질문 기능이 없으면(예: A/B) 빈 리스트를 반환한다.
     난이도와 무관하게 강제로 생성하려면 force=True 를 넘긴다.
     """
-    if not data.get("force") and not followup_enabled(data.get("difficulty")):
+    if not data.get("force") and not followup_enabled(data.get("difficulty"), data.get("custom_persona")):
         return []
 
     followup_count = int(data.get("followup_count", 2))

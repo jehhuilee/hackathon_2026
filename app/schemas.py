@@ -1,6 +1,6 @@
 """Pydantic request/response models for the interview REST API."""
 
-from typing import List
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -11,6 +11,8 @@ class SessionCreate(BaseModel):
     tech_stack: List[str] = Field(default_factory=list)
     resume_text: str = ""
     question_count: int = 5
+    difficulty: str = "B"
+    custom_persona: Optional[Dict[str, Any]] = None
 
 
 class QuestionOut(BaseModel):

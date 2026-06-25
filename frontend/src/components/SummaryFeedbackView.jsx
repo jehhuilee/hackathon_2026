@@ -89,6 +89,17 @@ export default function SummaryFeedbackView({ sessionId, onBack, onFinish }) {
                       </div>
                     </div>
 
+                    {(item.evaluation.strength || item.evaluation.weakness) && (
+                      <div style={styles.chipRow}>
+                        {item.evaluation.strength && (
+                          <span className="chip chip-good">👍 {item.evaluation.strength}</span>
+                        )}
+                        {item.evaluation.weakness && (
+                          <span className="chip chip-warn">🔧 {item.evaluation.weakness}</span>
+                        )}
+                      </div>
+                    )}
+
                     {item.answer?.transcript && (
                       <p style={styles.answerText}>{item.answer.transcript}</p>
                     )}
@@ -151,6 +162,7 @@ const styles = {
   qCategory: { fontSize: 13, color: "var(--muted)", marginTop: 2 },
   qScore: { fontSize: 28, fontWeight: 800, color: "var(--primary)", flexShrink: 0 },
   qScoreUnit: { fontSize: 14, marginLeft: 1 },
+  chipRow: { display: "flex", gap: 8, flexWrap: "wrap" },
   answerText: {
     margin: 0,
     fontSize: 14,

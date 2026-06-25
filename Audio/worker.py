@@ -102,7 +102,10 @@ async def analysis_worker(
                 )
 
                 # Resolve thresholds each cycle so a mid-stream persona change applies.
-                thresholds = get_thresholds(runtime_config.get("persona"))
+                thresholds = get_thresholds(
+                    runtime_config.get("persona"),
+                    runtime_config.get("custom_strictness"),
+                )
                 for alert in build_alerts(result, thresholds):
                     if cooldown.allow(alert["event"]):
                         sent = await send_json_safe(websocket, send_lock, alert)

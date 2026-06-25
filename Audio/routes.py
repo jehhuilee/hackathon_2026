@@ -86,8 +86,10 @@ async def audio_websocket(websocket: WebSocket) -> None:
                         runtime_config["vad_level"] = requested_vad_level
 
                     requested_persona = config.get("persona", runtime_config["persona"])
-                    if requested_persona in FEEDBACK_PROFILES:
+                    if requested_persona in FEEDBACK_PROFILES or requested_persona == "D":
                         runtime_config["persona"] = requested_persona
+                    if requested_persona == "D" and config.get("custom_strictness") is not None:
+                        runtime_config["custom_strictness"] = int(config["custom_strictness"])
 
                     await send_json_safe(
                         websocket,

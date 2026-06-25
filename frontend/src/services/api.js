@@ -69,4 +69,35 @@ export async function getOverallFeedback(sessionId) {
   return handle(response);
 }
 
+// Stream the overall feedback via SSE.
+// onChunk(text) fires for each raw LLM token; onDone(data) fires with the full
+// structured result; onError(err) fires on failure. Returns the EventSource so
+// the caller can .close() it on unmount.
+export function streamOverallFeedback(sessionId, { onChunk, onDone, onError } = {}) {
+  const es = new EventSource(`${BASE_URL}/api/sessions/${sessionId}/overall_feedback/stream`);
+  es.onmessage = (e) => {
+    let msg;
+    try {
+      msg = JSON.parse(e.data);
+    } catch {
+      return;
+    }
+    if (msg.type === "chunk") {
+      onChunk?.(msg.text);
+    } else if (msg.type === "done") {
+      const { type: _t, ...data } = msg;
+      onDone?.(data);
+      es.close();
+    } else if (msg.type === "error") {
+      onError?.(new Error(msg.message || "stream error"));
+      es.close();
+    }
+  };
+  es.onerror = () => {
+    onError?.(new Error("SSE connection failed"));
+    es.close();
+  };
+  return es;
+}
+
 export { BASE_URL };

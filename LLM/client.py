@@ -56,8 +56,8 @@ class OpenAIClient:
         if not self.base_url:
             self.base_url = "http://localhost:11434/v1"
 
-    def complete(self, prompt: str) -> str:
-        request = {
+    def _base_request(self, prompt: str) -> dict:
+        return {
             "model": self.model,
             "temperature": float(os.getenv("LLM_TEMPERATURE", "0.2")),
             "messages": [
@@ -68,11 +68,23 @@ class OpenAIClient:
                 {"role": "user", "content": prompt},
             ],
         }
+
+    def complete(self, prompt: str) -> str:
+        request = self._base_request(prompt)
         if self.backend == "ollama":
             request["extra_body"] = {"format": "json"}
 
         response = self.client.chat.completions.create(**request)
         return response.choices[0].message.content
+
+    def complete_stream(self, prompt: str):
+        """Yield string tokens as they are generated. Does not pass format=json to stay compatible with ollama streaming."""
+        request = {**self._base_request(prompt), "stream": True}
+        response = self.client.chat.completions.create(**request)
+        for chunk in response:
+            delta = chunk.choices[0].delta.content
+            if delta:
+                yield delta
 
 
 client = None
@@ -87,3 +99,7 @@ def get_client() -> OpenAIClient:
 
 def complete(prompt: str) -> str:
     return get_client().complete(prompt)
+
+
+def complete_stream(prompt: str):
+    return get_client().complete_stream(prompt)

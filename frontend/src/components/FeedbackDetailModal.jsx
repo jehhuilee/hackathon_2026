@@ -25,10 +25,28 @@ export default function FeedbackDetailModal({ record, onClose }) {
         <h3 style={styles.question}>{record.question || "(질문 없음)"}</h3>
 
         {evaluation && (
-          <div style={styles.scoreRow}>
-            <ScoreDonut value={evaluation.total_score} label="종합" color={SCORE_COLORS.total} size={72} />
-            <ScoreDonut value={evaluation.content_score} label="내용" color={SCORE_COLORS.content} size={72} />
-            <ScoreDonut value={evaluation.structure_score} label="구조" color={SCORE_COLORS.structure} size={72} />
+          <div style={styles.scoreTop}>
+            <div style={styles.scoreRow}>
+              <ScoreDonut value={evaluation.total_score} label="종합" color={SCORE_COLORS.total} size={72} />
+              <ScoreDonut value={evaluation.content_score} label="내용" color={SCORE_COLORS.content} size={72} />
+              <ScoreDonut value={evaluation.structure_score} label="구조" color={SCORE_COLORS.structure} size={72} />
+            </div>
+            {(evaluation.strength || evaluation.weakness) && (
+              <div style={styles.assess}>
+                {evaluation.strength && (
+                  <div style={styles.assessLine}>
+                    <span style={styles.assessHeadGood}>강점</span>
+                    <span className="chip chip-good">{evaluation.strength}</span>
+                  </div>
+                )}
+                {evaluation.weakness && (
+                  <div style={styles.assessLine}>
+                    <span style={styles.assessHeadWarn}>개선점</span>
+                    <span className="chip chip-warn">{evaluation.weakness}</span>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 
@@ -115,13 +133,19 @@ const styles = {
     color: "var(--muted)",
   },
   question: { margin: 0, color: "var(--text)", fontSize: 19, fontWeight: 800, lineHeight: 1.4 },
-  scoreRow: {
+  scoreTop: {
     display: "flex",
-    gap: 28,
-    padding: "8px 0 4px",
+    gap: 24,
+    alignItems: "center",
+    flexWrap: "wrap",
+    padding: "8px 0 12px",
     borderBottom: "1px solid var(--border)",
-    marginBottom: 4,
   },
+  scoreRow: { display: "flex", gap: 24, flexShrink: 0 },
+  assess: { flex: 1, minWidth: 200, display: "flex", flexDirection: "column", gap: 8 },
+  assessLine: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" },
+  assessHeadGood: { fontSize: 13, fontWeight: 800, color: "var(--success)", minWidth: 40 },
+  assessHeadWarn: { fontSize: 13, fontWeight: 800, color: "var(--warn)", minWidth: 40 },
   field: { display: "flex", flexDirection: "column", gap: 6 },
   fieldLabel: { fontSize: 13, fontWeight: 800, color: "var(--muted)" },
   fieldValue: {

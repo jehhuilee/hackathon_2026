@@ -29,11 +29,7 @@ function App() {
   // The interview screen is full-bleed (own progress header); the others sit
   // under the shared top navigation inside a centered content area.
   if (stage === "interview") {
-    return (
-      <div style={styles.shell}>
-        <InterviewSession session={session} onComplete={handleComplete} />
-      </div>
-    );
+    return <InterviewSession session={session} onComplete={handleComplete} />;
   }
 
   return (

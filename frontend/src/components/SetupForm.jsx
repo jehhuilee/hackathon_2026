@@ -28,6 +28,8 @@ const PERSONAS = [
   },
 ];
 
+const STRICTNESS_LABELS = ["", "매우 낮음", "낮음", "보통", "높음", "매우 높음"];
+
 // Collects the interview profile and creates a session (generates questions).
 export default function SetupForm({ onReady }) {
   const [jobRole, setJobRole] = useState("");
@@ -36,6 +38,12 @@ export default function SetupForm({ onReady }) {
   const [resumeText, setResumeText] = useState("");
   const [questionCount, setQuestionCount] = useState(5);
   const [persona, setPersona] = useState("B");
+  const [customPersona, setCustomPersona] = useState({
+    name: "",
+    style: "",
+    strictness: 3,
+    followup: false,
+  });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [pdfLoading, setPdfLoading] = useState(false);
@@ -76,15 +84,26 @@ export default function SetupForm({ onReady }) {
         tech_stack: techList,
         resume_text: resumeText,
         question_count: Number(questionCount),
+        difficulty: persona,
+        ...(persona === "D" ? { custom_persona: customPersona } : {}),
       };
       const result = await createSession(profile);
-      onReady({ ...result, persona, job_role: jobRole, company });
+      onReady({
+        ...result,
+        persona,
+        job_role: jobRole,
+        company,
+        ...(persona === "D" ? { custom_persona: customPersona } : {}),
+      });
     } catch (err) {
       setError(`질문 생성에 실패했습니다: ${err.message}`);
     } finally {
       setLoading(false);
     }
   };
+
+  const customDisplayName =
+    persona === "D" && customPersona.name ? customPersona.name : null;
 
   return (
     <form onSubmit={handleSubmit}>
@@ -223,7 +242,9 @@ export default function SetupForm({ onReady }) {
 
           <section className="card" style={styles.card}>
             <div style={styles.sectionLabel}>면접관 페르소나</div>
-            <div style={styles.personaGroup}>
+
+            {/* 2×2 그리드 */}
+            <div style={styles.personaGrid}>
               {PERSONAS.map((p) => {
                 const selected = persona === p.code;
                 return (
@@ -232,23 +253,149 @@ export default function SetupForm({ onReady }) {
                     key={p.code}
                     onClick={() => setPersona(p.code)}
                     style={{
-                      ...styles.personaCard,
-                      ...(selected ? styles.personaCardSelected : {}),
+                      ...styles.personaGridCard,
+                      ...(selected ? styles.personaGridCardSelected : {}),
                     }}
                   >
-                    <span style={{ ...styles.personaIcon, background: p.iconBg }}>{p.emoji}</span>
-                    <span style={{ flex: 1, textAlign: "left" }}>
-                      <span style={styles.personaTitle}>
-                        {p.code}. {p.title}
-                        {p.badge && <span style={styles.personaBadge}>{p.badge}</span>}
-                      </span>
-                      <span style={styles.personaDesc}>{p.desc}</span>
+                    <span
+                      style={{ ...styles.personaGridIcon, background: p.iconBg }}
+                    >
+                      {p.emoji}
                     </span>
-                    <span style={{ ...styles.radio, ...(selected ? styles.radioOn : {}) }} />
+                    <span style={styles.personaGridTitle}>
+                      {p.title}
+                      {p.badge && (
+                        <span style={styles.personaBadge}>{p.badge}</span>
+                      )}
+                    </span>
+                    <span style={styles.personaGridDesc}>{p.desc}</span>
                   </button>
                 );
               })}
+
+              {/* 사용자 설정 (D) 카드 */}
+              <button
+                type="button"
+                onClick={() => setPersona("D")}
+                style={{
+                  ...styles.personaGridCard,
+                  ...(persona === "D" ? styles.personaGridCardSelected : {}),
+                  ...(persona !== "D" ? styles.personaGridCardCustom : {}),
+                }}
+              >
+                <span
+                  style={{
+                    ...styles.personaGridIcon,
+                    background: persona === "D" ? "#e0e7ff" : "#f1f5f9",
+                    fontSize: customDisplayName ? 18 : 22,
+                    color: persona === "D" ? "#4f46e5" : "#64748b",
+                  }}
+                >
+                  {customDisplayName ? "✨" : "+"}
+                </span>
+                <span style={styles.personaGridTitle}>
+                  {customDisplayName || "사용자 설정"}
+                </span>
+                <span style={styles.personaGridDesc}>맞춤 설정하기</span>
+              </button>
             </div>
+
+            {/* 사용자 설정 페르소나 설정 패널 */}
+            {persona === "D" && (
+              <div style={styles.customPanel}>
+                <div style={styles.customPanelDivider} />
+
+                <label style={styles.customField}>
+                  <span style={styles.customFieldLabel}>
+                    면접관 이름{" "}
+                    <span style={styles.optionalHint}>(선택)</span>
+                  </span>
+                  <input
+                    className="input"
+                    value={customPersona.name}
+                    onChange={(e) =>
+                      setCustomPersona({ ...customPersona, name: e.target.value })
+                    }
+                    placeholder="나만의 면접관"
+                    style={styles.customInput}
+                  />
+                </label>
+
+                <label style={styles.customField}>
+                  <span style={styles.customFieldLabel}>
+                    면접 스타일{" "}
+                    <span style={styles.optionalHint}>(선택)</span>
+                  </span>
+                  <textarea
+                    className="input"
+                    value={customPersona.style}
+                    onChange={(e) =>
+                      setCustomPersona({ ...customPersona, style: e.target.value })
+                    }
+                    placeholder="예: 인성을 중시하는 따뜻한 스타트업 CTO 스타일"
+                    style={{ ...styles.customInput, height: 66, resize: "vertical" }}
+                  />
+                </label>
+
+                <div style={styles.customField}>
+                  <div style={styles.customFieldRow}>
+                    <span style={styles.customFieldLabel}>질문 강도</span>
+                    <span style={styles.strictnessValue}>
+                      {STRICTNESS_LABELS[customPersona.strictness]}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={1}
+                    max={5}
+                    value={customPersona.strictness}
+                    onChange={(e) =>
+                      setCustomPersona({
+                        ...customPersona,
+                        strictness: Number(e.target.value),
+                      })
+                    }
+                    style={styles.range}
+                  />
+                  <div style={styles.rangeEnds}>
+                    <span>낮음</span>
+                    <span>높음</span>
+                  </div>
+                </div>
+
+                <div style={styles.customField}>
+                  <div
+                    style={styles.toggleRow}
+                    onClick={() =>
+                      setCustomPersona({
+                        ...customPersona,
+                        followup: !customPersona.followup,
+                      })
+                    }
+                  >
+                    <div
+                      style={{
+                        ...styles.toggleTrack,
+                        background: customPersona.followup
+                          ? "var(--primary)"
+                          : "var(--border-strong)",
+                      }}
+                    >
+                      <div
+                        style={{
+                          ...styles.toggleThumb,
+                          left: customPersona.followup ? 20 : 2,
+                        }}
+                      />
+                    </div>
+                    <span style={styles.customFieldLabel}>꼬리 질문 허용</span>
+                  </div>
+                  <span style={{ ...styles.optionalHint, display: "block", marginTop: 4 }}>
+                    답변에 따라 추가 질문이 생성됩니다
+                  </span>
+                </div>
+              </div>
+            )}
           </section>
 
           {error && <p style={styles.error}>{error}</p>}
@@ -328,7 +475,7 @@ const styles = {
   countText: { fontSize: 15, fontWeight: 600, color: "var(--text)" },
   countBig: { fontSize: 38, fontWeight: 800, color: "var(--primary)", lineHeight: 1 },
   countUnit: { fontSize: 16, marginLeft: 2 },
-  range: { width: "100%", accentColor: "var(--primary)", marginTop: 16, cursor: "pointer" },
+  range: { width: "100%", accentColor: "var(--primary)", marginTop: 12, cursor: "pointer" },
   rangeEnds: {
     display: "flex",
     justifyContent: "space-between",
@@ -336,26 +483,36 @@ const styles = {
     fontSize: 13,
     marginTop: 4,
   },
-  personaGroup: { display: "flex", flexDirection: "column", gap: 10 },
-  personaCard: {
+
+  // 2×2 persona grid
+  personaGrid: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: 10,
+  },
+  personaGridCard: {
     display: "flex",
+    flexDirection: "column",
     alignItems: "center",
-    gap: 12,
-    padding: "12px 14px",
+    gap: 6,
+    padding: "14px 10px",
     borderRadius: 12,
-    border: "1px solid var(--border)",
+    border: "1.5px solid var(--border)",
     background: "var(--surface)",
     cursor: "pointer",
-    width: "100%",
+    textAlign: "center",
+    transition: "border-color 0.15s, background 0.15s",
   },
-  personaCardSelected: {
+  personaGridCardSelected: {
     border: "2px solid var(--primary)",
     background: "var(--primary-soft)",
-    padding: "11px 13px",
   },
-  personaIcon: {
-    width: 40,
-    height: 40,
+  personaGridCardCustom: {
+    borderStyle: "dashed",
+  },
+  personaGridIcon: {
+    width: 38,
+    height: 38,
     borderRadius: 10,
     display: "flex",
     alignItems: "center",
@@ -363,34 +520,98 @@ const styles = {
     fontSize: 20,
     flexShrink: 0,
   },
-  personaTitle: {
+  personaGridTitle: {
     display: "flex",
     alignItems: "center",
-    gap: 6,
+    justifyContent: "center",
+    gap: 4,
     fontWeight: 700,
-    fontSize: 15,
+    fontSize: 13,
     color: "var(--text)",
+    lineHeight: 1.3,
   },
   personaBadge: {
     background: "var(--primary)",
     color: "#fff",
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: 800,
-    padding: "1px 6px",
-    borderRadius: 5,
+    padding: "1px 5px",
+    borderRadius: 4,
   },
-  personaDesc: { display: "block", fontSize: 13, color: "var(--muted)", marginTop: 3 },
-  radio: {
-    width: 20,
-    height: 20,
-    borderRadius: "50%",
-    border: "2px solid var(--border-strong)",
+  personaGridDesc: {
+    fontSize: 11,
+    color: "var(--muted)",
+    lineHeight: 1.3,
+  },
+
+  // 사용자 설정 패널
+  customPanel: {
+    marginTop: 14,
+    display: "flex",
+    flexDirection: "column",
+    gap: 12,
+  },
+  customPanelDivider: {
+    height: 1,
+    background: "var(--border)",
+    margin: "0 -4px 2px",
+  },
+  customField: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 6,
+  },
+  customFieldLabel: {
+    fontWeight: 700,
+    fontSize: 13,
+    color: "var(--text)",
+  },
+  customFieldRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  customInput: {
+    fontSize: 13,
+  },
+  optionalHint: {
+    fontWeight: 500,
+    color: "var(--faint)",
+    fontSize: 12,
+  },
+  strictnessValue: {
+    fontSize: 12,
+    fontWeight: 700,
+    color: "var(--primary)",
+    background: "var(--primary-soft)",
+    padding: "2px 8px",
+    borderRadius: 6,
+  },
+  toggleRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    cursor: "pointer",
+    userSelect: "none",
+  },
+  toggleTrack: {
+    width: 40,
+    height: 22,
+    borderRadius: 11,
+    position: "relative",
     flexShrink: 0,
+    transition: "background 0.2s",
   },
-  radioOn: {
-    border: "6px solid var(--primary)",
+  toggleThumb: {
+    width: 18,
+    height: 18,
+    borderRadius: "50%",
     background: "#fff",
+    position: "absolute",
+    top: 2,
+    transition: "left 0.2s",
   },
+
   submit: { width: "100%", padding: "15px 18px", fontSize: 16 },
   error: { color: "var(--danger)", fontWeight: 600, margin: 0 },
 };

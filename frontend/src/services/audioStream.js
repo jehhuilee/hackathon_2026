@@ -67,12 +67,14 @@ function encodeWav(samples, sampleRate) {
 
 export class AudioFeedbackStream {
   // onAlert(event), onStatus(statusObj), onError(err) are optional callbacks for live UI.
-  // persona ("A" | "B" | "C") selects the interviewer strictness for alert thresholds.
-  constructor({ onAlert, onStatus, onError, persona } = {}) {
+  // persona ("A"|"B"|"C"|"D") selects the interviewer strictness for alert thresholds.
+  // customStrictness (1-5) is used when persona is "D" to interpolate thresholds.
+  constructor({ onAlert, onStatus, onError, persona, customStrictness } = {}) {
     this.onAlert = onAlert;
     this.onStatus = onStatus;
     this.onError = onError;
     this.persona = persona || "B";
+    this.customStrictness = customStrictness ?? null;
     this.ws = null;
     this.audioContext = null;
     this.source = null;
@@ -100,9 +102,11 @@ export class AudioFeedbackStream {
     this.ws.binaryType = "arraybuffer";
 
     this.ws.onopen = () => {
-      this.ws.send(
-        JSON.stringify({ event: "config", dtype: "int16", vad_level: 2, persona: this.persona }),
-      );
+      const configMsg = { event: "config", dtype: "int16", vad_level: 2, persona: this.persona };
+      if (this.persona === "D" && this.customStrictness !== null) {
+        configMsg.custom_strictness = this.customStrictness;
+      }
+      this.ws.send(JSON.stringify(configMsg));
 
       this.audioContext = new AudioContext();
       this.source = this.audioContext.createMediaStreamSource(stream);
